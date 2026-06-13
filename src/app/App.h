@@ -1,5 +1,7 @@
 #pragma once
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
@@ -134,6 +136,34 @@ class App {
   boost::lockfree::spsc_queue<std::vector<HandLandmarks>,
                               boost::lockfree::capacity<4>>
       debugLandmarkQ_;
+
+  // Task 33: shared, lock-free current capture rate. The inference
+  // loop downshifts to kIdleFps after `kIdleDownshiftMs` of no
+  // detected hands and upshifts back to the perf-mode rate on any
+  // detection. The capture loop reads this value once per tick
+  // (it's an atomic int, not a mutex-protected variable) so the
+  // throttle updates without any cross-thread signaling.
+  std::atomic<int> currentFps_{30};
+
+  // Task 33: timestamp of the most recent successful hand
+  // detection. Monotonic steady_clock milliseconds. Initialized to
+  // "now" at construction so we don't downshift immediately after
+  // startup before the first frame has had a chance to come back
+  // from the detector.
+  std::atomic<int64_t> lastDetectionMs_{
+      static_cast<int64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now().time_since_epoch())
+              .count())};
+
+  // Constants for the idle down-shift. kIdleFps is well below the
+  // 30Hz default so the capture + inference CPU cost is cut ~3x
+  // during the long stretches where the user isn't actively using
+  // the gesture mouse. kIdleDownshiftMs is the dead-band: 5s of
+  // no detection before we downshift, hysteresis 0 (any detection
+  // brings us back up).
+  static constexpr int    kIdleFps          = 10;
+  static constexpr int64_t kIdleDownshiftMs  = 5000;
 };
 
 }  // namespace vmosue

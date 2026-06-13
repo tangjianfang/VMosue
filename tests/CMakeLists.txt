@@ -14,6 +14,8 @@ add_executable(vmosue_tests
   unit/test_config.cpp
   unit/test_watchdog.cpp
   unit/test_display_info.cpp
+  unit/test_frame_resampler.cpp
+  unit/test_profile_guard.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util

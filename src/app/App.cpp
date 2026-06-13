@@ -4,7 +4,9 @@
 #include "config/Config.h"
 #include "input/InputInjector.h"
 #include "platform/Hotkey.h"
+#include "util/FrameResampler.h"
 #include "util/Logger.h"
+#include "util/ProfileGuard.h"
 #include "ui/TrayIcon.h"
 
 #include <algorithm>
@@ -128,13 +130,25 @@ int App::Run() {
 
   HandDetector::Config hcfg;
   hcfg.useGpu = initialPerf.useGpu;
+  // Task 33: pin the inference resolution. The App's inference
+  // loop will downscale the camera frame to these dimensions
+  // before calling Detect(). 640x480 is a reasonable default for
+  // hand landmarking; the spec mentions it explicitly. We seed
+  // currentFps_ to the perf-mode inference rate so the capture
+  // loop throttles correctly from the very first frame.
+  hcfg.inferenceWidth = 640;
+  hcfg.inferenceHeight = 480;
   if (!detector_.Init(hcfg).isOk()) {
     VMOSUE_LOG_ERROR("HandDetector init failed");
     return 1;
   }
-  VMOSUE_LOG_INFO("PerfMode initial: infer={}fps capture={}fps gpu={}",
+  currentFps_.store(std::max(1, initialPerf.captureFps),
+                    std::memory_order_relaxed);
+  VMOSUE_LOG_INFO("PerfMode initial: infer={}fps capture={}fps gpu={} "
+                  "inferRes={}x{}",
                   initialPerf.inferenceFps, initialPerf.captureFps,
-                  initialPerf.useGpu ? "on" : "off");
+                  initialPerf.useGpu ? "on" : "off",
+                  hcfg.inferenceWidth, hcfg.inferenceHeight);
 
   sm_.Init({});
 
@@ -397,9 +411,16 @@ void App::captureLoop() {
 
       // Read the perf mode on every tick so a user-driven
       // dropdown change in the Settings window takes effect
-      // immediately on the next frame.
+      // immediately on the next frame. The `currentFps_` atomic
+      // (Task 33) is the live rate including the idle down-shift:
+      // the inference loop downshifts to kIdleFps after 5s of no
+      // detections and upshifts back to mode.captureFps on any
+      // detection. We use min() so a user-initiated lower rate
+      // (e.g., battery mode's 15fps) is respected even if the
+      // idle down-shift would otherwise force 10Hz.
       const PerfMode mode = CurrentPerfMode();
-      const int targetFps = std::max(1, mode.captureFps);
+      const int liveFps  = currentFps_.load(std::memory_order_relaxed);
+      const int targetFps = std::max(1, std::min(mode.captureFps, liveFps));
 
       Frame f;
       if (cam_.TryGetLatestFrame(f)) {
@@ -443,6 +464,15 @@ void App::inferenceLoop() {
     // setter is cheap, but the log line on every iteration would
     // be noisy).
     bool lastGpu = detector_.UseGpu();
+    // Task 33: a single downscale buffer reused across frames.
+    // The detector's configured inference resolution is fixed
+    // for the App's lifetime (640x480 default), so allocating
+    // once is correct. We still re-check the resolution on each
+    // frame so a future "live resolution switch" feature can
+    // reconfigure without a restart — for v0.3 the value never
+    // changes.
+    Frame inferenceFrame;
+    bool haveInferenceFrame = false;
     while (running_.load()) {
       // Task 24: see captureLoop().
       Watchdog::Get().Heartbeat(std::this_thread::get_id());
@@ -461,23 +491,83 @@ void App::inferenceLoop() {
 
       Frame f;
       if (frameQ_.pop(f)) {
-        auto hands = detector_.Detect(f);
-        // Use the perf-mode inference rate for the smoother's
-        // time step (dt = 1/fps). This keeps the One-Euro
-        // filter tuned to the actual cadence of incoming
-        // landmarks.
-        const double dt = 1.0 / std::max(1, mode.inferenceFps);
-        for (auto& h : hands) {
-          smoother_.Smooth(h, dt);
+        // Task 33: downscale the camera frame to the detector's
+        // configured inference resolution before running the
+        // model. ResizeFrame() is a no-op if the source is
+        // already the right size (the camera may already be
+        // configured for 640x480). The ProfileGuard wraps the
+        // entire detect path so we can log a warn if P95
+        // exceeds the 60ms spec budget.
+        const uint32_t iw = static_cast<uint32_t>(detector_.InferenceWidth());
+        const uint32_t ih = static_cast<uint32_t>(detector_.InferenceHeight());
+        // Refresh the detector's stored resolution if the App
+        // config changed it externally (not used in v0.3 but
+        // cheap to keep the setter in the loop).
+        if (iw > 0 && ih > 0) {
+          if (!haveInferenceFrame ||
+              inferenceFrame.width != iw || inferenceFrame.height != ih) {
+            detector_.SetFrameSize(static_cast<int>(iw), static_cast<int>(ih));
+            haveInferenceFrame = true;
+          }
+          ResizeFrame(f, inferenceFrame, iw, ih);
+        } else {
+          inferenceFrame = f;  // pass-through if config invalid
         }
-        // SPSC: same drop-on-full semantics as the capture queue. We
-        // move() to avoid a deep copy of the HandLandmarks arrays.
-        landmarkQ_.push(std::move(hands));
-        // Task 29: mirror to the debug queue. We have to copy
-        // (not move) because the state machine loop is the
+
+        std::vector<HandLandmarks> hands;
+        {
+          PROFILE_GUARD("inference");
+          hands = detector_.Detect(inferenceFrame);
+          // Use the perf-mode inference rate for the smoother's
+          // time step (dt = 1/fps). This keeps the One-Euro
+          // filter tuned to the actual cadence of incoming
+          // landmarks.
+          const double dt = 1.0 / std::max(1, mode.inferenceFps);
+          for (auto& h : hands) {
+            smoother_.Smooth(h, dt);
+          }
+        }
+
+        // Task 33: idle down-shift. If we got at least one
+        // hand, mark the timestamp and (re)raise the capture
+        // rate to the perf-mode ceiling. If the hands list is
+        // empty and 5s have passed since the last detection,
+        // lower the capture rate to kIdleFps so the camera +
+        // detector are running at ~10Hz instead of 30Hz (or
+        // 60Hz, on performance mode).
+        const int64_t now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now().time_since_epoch()).count();
+        if (!hands.empty()) {
+          lastDetectionMs_.store(now_ms, std::memory_order_relaxed);
+          const int target = std::max(1, mode.captureFps);
+          const int prev = currentFps_.load(std::memory_order_relaxed);
+          if (prev != target) {
+            currentFps_.store(target, std::memory_order_relaxed);
+            VMOSUE_LOG_INFO("PerfMode: upshift to {} fps (hand detected)",
+                            target);
+          }
+        } else {
+          const int64_t last = lastDetectionMs_.load(std::memory_order_relaxed);
+          if (now_ms - last >= kIdleDownshiftMs) {
+            const int prev = currentFps_.load(std::memory_order_relaxed);
+            if (prev != kIdleFps) {
+              currentFps_.store(kIdleFps, std::memory_order_relaxed);
+              VMOSUE_LOG_INFO("PerfMode: downshift to {} fps (idle >= {}ms)",
+                              kIdleFps, kIdleDownshiftMs);
+            }
+          }
+        }
+
+        // Task 29: mirror to the debug queue BEFORE the move so
+        // we have a copy to push. The state machine loop is the
         // primary consumer of the moved-from set. The copy is
         // cheap relative to the inference cost it shadows.
         debugLandmarkQ_.push(hands);
+
+        // SPSC: same drop-on-full semantics as the capture queue. We
+        // move() to avoid a deep copy of the HandLandmarks arrays.
+        landmarkQ_.push(std::move(hands));
       }
 
       // Throttle the loop to the configured inference rate. The
