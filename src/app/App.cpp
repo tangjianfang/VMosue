@@ -4,11 +4,28 @@
 #include "input/InputInjector.h"
 #include "platform/Hotkey.h"
 #include "util/Logger.h"
+#include "ui/TrayIcon.h"
 
 #include <chrono>
 #include <exception>
 
 namespace vmosue {
+
+namespace {
+// Static window class registration for the tray message-only window.
+// Done in the .cpp TU so the class name and WndProc are local. The
+// class is registered once (the first time App::Run is called) and
+// left registered for the process lifetime — App is a singleton in
+// practice.
+const wchar_t* const kTrayMsgClass = L"VMosueTrayMessageWindow";
+bool g_trayClassRegistered = false;
+}  // namespace
+
+LRESULT CALLBACK App::TrayMsgWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  // Forward to TrayIcon's WndProc, which knows how to translate the
+  // tray callback message and menu commands into App-level callbacks.
+  return TrayIcon::WndProc(h, m, w, l);
+}
 
 App::App() = default;
 
@@ -38,6 +55,50 @@ int App::Run() {
   sm_.Init({});
 
   if (!overlay_.Init(nullptr)) VMOSUE_LOG_WARN("Overlay init failed");
+
+  // Task 26: register the message-only window class once and create
+  // the hidden HWND that will receive tray icon callbacks. We do the
+  // class registration here (not in TrayIcon::Init) because the class
+  // name and WndProc live in this TU — TrayIcon::WndProc forwards
+  // through here.
+  if (!g_trayClassRegistered) {
+    WNDCLASSEX wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &App::TrayMsgWndProc;
+    wc.hInstance = GetModuleHandle(nullptr);
+    wc.lpszClassName = kTrayMsgClass;
+    if (RegisterClassEx(&wc) ||
+        GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+      g_trayClassRegistered = true;
+    } else {
+      VMOSUE_LOG_WARN("Failed to register tray message window class");
+    }
+  }
+  trayMsgWnd_ = CreateWindowEx(
+      WS_EX_TOOLWINDOW, kTrayMsgClass, L"", 0, 0, 0, 0, 0,
+      HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), nullptr);
+  if (!trayMsgWnd_) {
+    VMOSUE_LOG_WARN("Failed to create tray message window");
+  } else {
+    TrayIcon::MenuCallbacks cb{};
+    // Pause/Resume is the only callback with real behavior in v0.2:
+    // it forwards to the GestureStateMachine's Pause/Resume API so
+    // the overlay indicator reflects the new state. The other menu
+    // items wire to windows that haven't been built yet (Tasks 27,
+    // 29, 30) — we install no-op lambdas that log the request.
+    cb.onTogglePause = [this]() {
+      auto s = sm_.State();
+      if (s == GlobalState::Paused) sm_.Resume(); else sm_.Pause();
+      VMOSUE_LOG_INFO("Tray: toggle pause -> {}", (int)sm_.State());
+    };
+    cb.onOpenSettings = []()  { VMOSUE_LOG_INFO("Tray: Settings (not implemented yet)"); };
+    cb.onOpenDebug    = []()  { VMOSUE_LOG_INFO("Tray: Debug (not implemented yet)"); };
+    cb.onOpenTutorial = []()  { VMOSUE_LOG_INFO("Tray: Tutorial (not implemented yet)"); };
+    cb.onExit         = [this]() { VMOSUE_LOG_INFO("Tray: Exit requested"); Shutdown(); };
+    if (!tray_.Init(trayMsgWnd_, cb)) {
+      VMOSUE_LOG_WARN("Tray icon init failed");
+    }
+  }
 
   // Task 21: register the two emergency-stop triggers. Both call into
   // the state machine which sets state_=EmergencyStopped, drains
@@ -69,12 +130,17 @@ int App::Run() {
 
   VMOSUE_LOG_INFO("App started. Press Ctrl+C in console to exit.");
 
-  // Main thread just sleeps until Shutdown() flips running_. A real
-  // product would install a console control handler and call Shutdown
-  // from there; that's the responsibility of a later task (e.g.
-  // EmergencyStop hotkey).
+  // Main thread pumps messages from the tray message-only window so
+  // the tray icon callbacks can dispatch. We also use the running_
+  // flag as a "quit" signal: when Shutdown() flips it, we break out
+  // of the pump. This replaces the prior busy-wait sleep loop so the
+  // tray menu events are responsive.
+  MSG msg;
   while (running_.load()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    BOOL got = GetMessageW(&msg, trayMsgWnd_, 0, 0);
+    if (got == 0 || got == -1) break;  // WM_QUIT or error
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
   }
 
   Shutdown();
@@ -107,6 +173,16 @@ void App::Shutdown() {
   cam_.Stop();
 
   overlay_.Shutdown();
+
+  // Task 26: tear the tray icon down BEFORE the message-only window.
+  // Shell_NotifyIcon(NIM_DELETE) needs the HWND to be valid; if we
+  // destroyed the window first the shell would leak the icon until
+  // the process exits (and may show a phantom icon on next logon).
+  tray_.Shutdown();
+  if (trayMsgWnd_) {
+    DestroyWindow(trayMsgWnd_);
+    trayMsgWnd_ = nullptr;
+  }
 
   // Belt-and-braces: make sure the OS cursor state is sane before the
   // process goes away. SafeReleaseAll() is a no-op if nothing is held.

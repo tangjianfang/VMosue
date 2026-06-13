@@ -9,6 +9,7 @@
 #include "inference/LandmarkSmoother.h"
 #include "gesture/GestureStateMachine.h"
 #include "ui/OverlayWindow.h"
+#include "ui/TrayIcon.h"
 
 namespace vmosue {
 
@@ -55,6 +56,15 @@ class App {
   LandmarkSmoother smoother_;
   GestureStateMachine sm_;
   OverlayWindow overlay_;
+  TrayIcon tray_;
+
+  // Task 26: a hidden message-only window that owns the tray icon
+  // callbacks. TrayIcon::Shutdown() does NOT destroy this window;
+  // it's owned by App and torn down in Shutdown() AFTER the tray
+  // icon has been removed. The main thread pumps its message queue
+  // while waiting for Shutdown().
+  HWND trayMsgWnd_ = nullptr;
+  static LRESULT CALLBACK TrayMsgWndProc(HWND, UINT, WPARAM, LPARAM);
 
   // SPSC queue between T1 (producer) and T2 (consumer). Capacity 2
   // gives one slot of slack without forcing the producer to block.
