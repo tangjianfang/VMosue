@@ -48,3 +48,14 @@ TEST(StateMachine, ActiveEmitsClickOnPinch) {
   auto actions = sm.ConsumeActions();
   EXPECT_TRUE(actions.leftClick);
 }
+
+TEST(StateMachine, TracksBothHands) {
+  GestureStateMachine sm;
+  sm.Init({});
+  std::vector<vmosue::HandLandmarks> both;
+  vmosue::HandLandmarks l{}; l.handedness = 0;
+  vmosue::HandLandmarks r{}; r.handedness = 1;
+  both.push_back(l); both.push_back(r);
+  sm.OnLandmarks(both, 0, 1.0/30.0);
+  SUCCEED();
+}

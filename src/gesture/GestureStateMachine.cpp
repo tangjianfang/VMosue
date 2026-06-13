@@ -64,6 +64,26 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   }
   if (!right) return;
 
+  // Find the "other" hand (opposite of configured handedness) for future
+  // two-hand gestures. Task 16 lays the groundwork; Task 19 will wire a
+  // ScrollDetector that consumes `other` landmarks, and Task 20 will add
+  // a PauseDetector. Until those detectors exist, `other` is unused —
+  // computed per-call rather than stored, so the pointer cannot dangle
+  // across frames.
+  const HandLandmarks* other = nullptr;
+  {
+    int otherHandedness = cfg_.handednessRight ? 0 : 1;
+    for (const auto& h : hands) {
+      if (h.handedness == otherHandedness) {
+        other = &h;
+        break;
+      }
+    }
+  }
+  // TODO(Task 19): pass `other` landmarks to ScrollDetector.
+  // TODO(Task 20): pass `other` landmarks to PauseDetector.
+  (void)other;
+
   ActionSet local;
 
   // Task 13 fix (spec bug): CursorController::OnLandmarks previously
