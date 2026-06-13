@@ -3,6 +3,7 @@
 #include "capture/CameraCapture.h"
 #include "config/Calibration.h"
 #include "config/Config.h"
+#include "platform/AutoStart.h"
 #include "util/I18n.h"
 #include "util/Logger.h"
 
@@ -361,12 +362,16 @@ void SettingsWindow::LoadFromConfig() {
     }
   }
 
-  // AutoStart checkbox reflects config.autoStart. Task 32 will wire
-  // AutoStart::Enable/Disable on toggle; for v0.2 we just persist
-  // the flag.
+  // AutoStart checkbox reflects the live registry state. The
+  // registry is the source of truth for "is autostart on right
+  // now?" because the user may have toggled it from outside the
+  // app (Task Manager -> Startup, regedit, etc.). The config's
+  // autoStart flag is updated by WM_COMMAND when the user clicks
+  // the checkbox so it survives a config-save round trip.
   if (hwndAutoStartChk_) {
     SendMessageW(hwndAutoStartChk_, BM_SETCHECK,
-                 cfg.autoStart ? BST_CHECKED : BST_UNCHECKED, 0);
+                 AutoStart::IsEnabled() ? BST_CHECKED
+                                        : BST_UNCHECKED, 0);
   }
 }
 
@@ -443,13 +448,13 @@ void SettingsWindow::SaveToConfig() {
     }
   }
 
-  // AutoStart checkbox.
+  // AutoStart checkbox. The WM_COMMAND handler already updated
+  // cfg.autoStart and the registry on toggle; we still re-read the
+  // checkbox here so a future save path that bypasses the toggle
+  // (e.g. a "Restore defaults" button) writes a consistent value.
   if (hwndAutoStartChk_) {
     LRESULT state = SendMessageW(hwndAutoStartChk_, BM_GETCHECK, 0, 0);
     cfg.autoStart = (state == BST_CHECKED);
-    // Task 32 will react to cfg.autoStart changes by calling
-    // AutoStart::Enable()/Disable(). For v0.2 we just persist the
-    // flag; the actual registry edit happens in that task.
   }
 
   auto res = Config::Get().Save();
@@ -521,6 +526,35 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
                       L"Calibration flow not yet implemented (see Task 22 stub).",
                       L"VMosue", MB_OK | MB_ICONINFORMATION);
         }
+        return 0;
+      }
+      if (id == kIdAutoStartChk && code == BN_CLICKED) {
+        // React to the toggle by writing to the registry. We read
+        // the checkbox state rather than tracking a "previous"
+        // value so the handler is reentrant if the message fires
+        // twice for some reason (e.g. double-click bounce). On
+        // Enable() failure we revert the checkbox and surface a
+        // message; Disable() is idempotent so no error popup is
+        // needed there.
+        LRESULT state = SendMessageW(self->hwndAutoStartChk_,
+                                     BM_GETCHECK, 0, 0);
+        bool want = (state == BST_CHECKED);
+        bool ok = want ? AutoStart::Enable() : AutoStart::Disable();
+        if (!ok) {
+          // Revert checkbox and Config so the UI agrees with the
+          // OS (registry is the source of truth).
+          SendMessageW(self->hwndAutoStartChk_, BM_SETCHECK,
+                       want ? BST_UNCHECKED : BST_CHECKED, 0);
+          Config::Get().Mutable().autoStart = !want;
+          MessageBoxW(hwnd,
+                      want ? L"Failed to enable auto-start. "
+                            L"Check that you have permission to "
+                            L"write to HKEY_CURRENT_USER."
+                          : L"Failed to disable auto-start.",
+                      L"VMosue", MB_OK | MB_ICONERROR);
+          return 0;
+        }
+        Config::Get().Mutable().autoStart = want;
         return 0;
       }
       // Combo / checkbox edits are reflected in the live label and

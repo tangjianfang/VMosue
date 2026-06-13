@@ -8,6 +8,8 @@ add_library(vmosue_platform STATIC
   Hotkey.cpp
   DisplayInfo.h
   DisplayInfo.cpp
+  AutoStart.h
+  AutoStart.cpp
 )
 target_include_directories(vmosue_platform PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(vmosue_platform PUBLIC vmosue_util)
