@@ -7,6 +7,7 @@ add_executable(vmosue_tests
   unit/test_click_detector.cpp
   unit/test_air_click_detector.cpp
   unit/test_input_injector.cpp
+  unit/test_state_machine.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util

@@ -5,6 +5,11 @@
 
 namespace vmosue {
 
+// Forward declaration: defined in GestureStateMachine.h. The .cpp file
+// includes that header so the parameter type is complete at the point of
+// use; here we only need the type name for the reference parameter.
+struct ActionSet;
+
 // CursorController maps right-hand index-finger motion to system cursor
 // movement. The pivot is the index finger MCP (landmark 5) - using MCP
 // rather than the fingertip avoids a hard cursor jump on click/press
@@ -23,7 +28,10 @@ class CursorController {
   };
 
   void SetConfig(const Config&);
-  void OnLandmarks(const HandLandmarks& right, double dt);
+  // Writes computed cursor pixel delta into actions.cursorDx / actions.cursorDy
+  // so the state machine can propagate it to the input layer. (Task 13 fix:
+  // the original void return dropped the delta.)
+  void OnLandmarks(const HandLandmarks& right, ActionSet& actions, double dt);
   void Reset();
 
  private:

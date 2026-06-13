@@ -1,4 +1,5 @@
 #include "gesture/CursorController.h"
+#include "gesture/GestureStateMachine.h"  // for ActionSet (complete type)
 #include "util/Logger.h"
 #include <cmath>
 
@@ -7,7 +8,10 @@ namespace vmosue {
 void CursorController::SetConfig(const Config& c) { cfg_ = c; }
 void CursorController::Reset() { initialized_ = false; prevPivot_.reset(); }
 
-void CursorController::OnLandmarks(const HandLandmarks& right, double dt) {
+void CursorController::OnLandmarks(const HandLandmarks& right, ActionSet& actions, double dt) {
+  (void)dt;  // Currently no time-aware smoothing; the dead zone + sensitivity
+             // suffice. Kept in the signature to allow future velocity-based
+             // filtering (e.g. frame-rate independent dead zones).
   if (right.points.empty()) return;
   // Index finger MCP is landmark 5; we'll track that to avoid cursor jump on click.
   const auto& p = right.points[5];
@@ -25,7 +29,10 @@ void CursorController::OnLandmarks(const HandLandmarks& right, double dt) {
   int pixelDy = static_cast<int>(dy * 1080.0f);
   if (pixelDx != 0 || pixelDy != 0) {
     VMOSUE_LOG_DEBUG("Cursor delta: ({}, {})", pixelDx, pixelDy);
-    // InputInjector::Get().MoveCursor(pixelDx, pixelDy);  // wired in Task 12
+    // Task 13: propagate delta via the ActionSet so the consumer thread
+    // can dispatch it to InputInjector. The state machine owns the mutex.
+    actions.cursorDx = pixelDx;
+    actions.cursorDy = pixelDy;
   }
   prevPivot_ = p;
 }

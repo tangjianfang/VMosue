@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "gesture/CursorController.h"
+#include "gesture/GestureStateMachine.h"
 
 using vmosue::CursorController;
 
@@ -15,6 +16,7 @@ TEST(CursorController, DeadZoneFiltersSmallMotion) {
   // the integration test using recorded landmarks.
   CursorController c;
   vmosue::HandLandmarks lm{};
-  for (int i = 0; i < 5; ++i) c.OnLandmarks(lm, 1.0/30.0);
+  vmosue::ActionSet actions{};
+  for (int i = 0; i < 5; ++i) c.OnLandmarks(lm, actions, 1.0/30.0);
   SUCCEED();
 }
