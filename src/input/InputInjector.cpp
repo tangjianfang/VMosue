@@ -1,5 +1,6 @@
 #include "input/InputInjector.h"
 
+#include "platform/DisplayInfo.h"
 #include "util/Logger.h"
 
 #include <windows.h>
@@ -7,6 +8,13 @@
 namespace vmosue {
 
 namespace {
+
+// Reference width the gesture pipeline (CursorController / GestureStateMachine)
+// normalizes cursor deltas into. We scale by (activeMonitorWidth / kRefWidth)
+// so a 1-unit delta on a 4K monitor produces the same on-screen travel as
+// a 1-unit delta on a 1080p monitor. The choice of 1920 is documented in
+// CursorController's "sensitivity" calibration contract.
+constexpr int kRefWidth = 1920;
 
 // Helper for the common case: flag-only mouse events (no dx/dy). For
 // relative moves we construct INPUT directly in MoveCursor() because
@@ -27,6 +35,27 @@ void sendMouseInput(DWORD flags, DWORD data = 0) {
   }
 }
 
+// Compute the (activeMonitorWidth / kRefWidth) scale factor used to
+// convert a normalized cursor delta into a per-monitor pixel delta.
+// The active monitor is the one containing the current cursor, or
+// the nearest one if the cursor is between monitors.
+//
+// Returns 1.0 (identity) when we cannot determine the active monitor
+// (e.g., the monitor API fails, the monitor has a degenerate rect, or
+// no monitor is attached). Falling back to identity keeps the previous
+// single-monitor behavior intact.
+double activeMonitorScale() {
+  POINT cur = DisplayInfo::CursorPos();
+  HMONITOR hMon = ::MonitorFromPoint(cur, MONITOR_DEFAULTTONEAREST);
+  if (!hMon) return 1.0;
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (!::GetMonitorInfo(hMon, &mi)) return 1.0;
+  LONG w = mi.rcMonitor.right - mi.rcMonitor.left;
+  if (w <= 0) return 1.0;
+  return static_cast<double>(w) / static_cast<double>(kRefWidth);
+}
+
 }  // namespace
 
 InputInjector& InputInjector::Get() {
@@ -39,6 +68,18 @@ InputInjector::InputInjector() = default;
 void InputInjector::MoveCursor(int dx, int dy) {
   if (dx == 0 && dy == 0) return;
 
+  // The gesture pipeline produces deltas in a normalized 1920-wide
+  // reference space (see CursorController). We scale them to the
+  // active monitor's width so a hand movement covers the same
+  // fraction of the screen on a 4K secondary monitor as on a 1080p
+  // primary. Y uses the same X-derived scale rather than per-axis
+  // scaling, which keeps aspect ratio identical across monitors of
+  // the same aspect but different sizes (the common case).
+  const double scale = activeMonitorScale();
+  const int scaledDx = static_cast<int>(static_cast<double>(dx) * scale);
+  const int scaledDy = static_cast<int>(static_cast<double>(dy) * scale);
+  if (scaledDx == 0 && scaledDy == 0) return;
+
   // For relative moves, dx/dy must be set on the MOUSEINPUT struct.
   // (Spec bug fix: the previous draft of this method called
   // sendMouseInput(MOUSEEVENTF_MOVE, 0) here, which sent a redundant
@@ -49,8 +90,8 @@ void InputInjector::MoveCursor(int dx, int dy) {
   INPUT in{};
   in.type = INPUT_MOUSE;
   in.mi.dwFlags = MOUSEEVENTF_MOVE;
-  in.mi.dx = dx;
-  in.mi.dy = dy;
+  in.mi.dx = scaledDx;
+  in.mi.dy = scaledDy;
   if (::SendInput(1, &in, sizeof(in)) != 1) {
     VMOSUE_LOG_WARN("SendInput(MOVE) failed: gle={}", ::GetLastError());
   }

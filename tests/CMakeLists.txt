@@ -13,11 +13,13 @@ add_executable(vmosue_tests
   unit/test_calibration.cpp
   unit/test_config.cpp
   unit/test_watchdog.cpp
+  unit/test_display_info.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util
   vmosue_gesture
   vmosue_input
+  vmosue_platform
   vmosue_config
   GTest::gtest_main
 )
