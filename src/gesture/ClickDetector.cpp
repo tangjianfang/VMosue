@@ -36,13 +36,13 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
         lastClickMs_ = ts;
         phase_ = Phase::Idle;
       } else if ((ts - pinchStartMs_) > cfg_.holdForDragMs) {
-        ev = ClickEvent::LeftDown;
+        ev = ClickEvent::LeftDragStart;
         phase_ = Phase::Held;
       }
       break;
     case Phase::Held:
       if (d > cfg_.releaseThresholdNorm) {
-        ev = ClickEvent::LeftUp;
+        ev = ClickEvent::LeftDragEnd;
         phase_ = Phase::Idle;
       }
       break;

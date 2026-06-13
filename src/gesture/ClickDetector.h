@@ -4,7 +4,15 @@
 
 namespace vmosue {
 
-enum class ClickEvent { None, LeftClick, LeftDoubleClick, LeftDown, LeftUp };
+enum class ClickEvent {
+  None,
+  LeftClick,
+  LeftDoubleClick,
+  LeftDown,
+  LeftUp,
+  LeftDragStart,
+  LeftDragEnd,
+};
 
 class ClickDetector {
  public:

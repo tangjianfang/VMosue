@@ -66,11 +66,21 @@ TEST(ClickDetector, ResetClearsLastClick) {
   EXPECT_EQ(d.OnLandmarks(makeHand(0.10f), t + 300), ClickEvent::LeftClick);
 }
 
-TEST(ClickDetector, EmitsDownOnSustainedPinch) {
+TEST(ClickDetector, EmitsDragStartOnSustainedPinch) {
   ClickDetector d;
   d.SetConfig({});
   int64_t t = 0;
   d.OnLandmarks(makeHand(0.10f), t);
   d.OnLandmarks(makeHand(0.02f), t + 50);
-  EXPECT_EQ(d.OnLandmarks(makeHand(0.02f), t + 300), ClickEvent::LeftDown);
+  EXPECT_EQ(d.OnLandmarks(makeHand(0.02f), t + 300), ClickEvent::LeftDragStart);
+}
+
+TEST(ClickDetector, EmitsDragStartOnLongPinch) {
+  ClickDetector d;
+  d.SetConfig({});
+  int64_t t = 0;
+  d.OnLandmarks(makeHand(0.10f), t);
+  d.OnLandmarks(makeHand(0.02f), t + 50);
+  EXPECT_EQ(d.OnLandmarks(makeHand(0.02f), t + 300), vmosue::ClickEvent::LeftDragStart);
+  EXPECT_EQ(d.OnLandmarks(makeHand(0.10f), t + 400), vmosue::ClickEvent::LeftDragEnd);
 }

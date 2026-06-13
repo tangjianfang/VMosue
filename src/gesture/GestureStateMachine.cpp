@@ -96,8 +96,10 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   switch (clickEv) {
     case ClickEvent::LeftClick:       local.leftClick = true; break;
     case ClickEvent::LeftDoubleClick: local.leftDoubleClick = true; break;
-    case ClickEvent::LeftDown:        local.leftDown = true; break;
-    case ClickEvent::LeftUp:          local.leftUp = true; break;
+    case ClickEvent::LeftDown:        local.leftDown = true; break;        // legacy fallback (shouldn't fire)
+    case ClickEvent::LeftUp:          local.leftUp = true; break;          // legacy fallback (shouldn't fire)
+    case ClickEvent::LeftDragStart:   local.leftDown = true; break;        // DragStart maps to LMB down
+    case ClickEvent::LeftDragEnd:     local.leftUp = true; break;          // DragEnd maps to LMB up
     default: break;
   }
   if (airClick_.OnLandmarks(*right, ts) == AirClickEvent::RightClick) {
