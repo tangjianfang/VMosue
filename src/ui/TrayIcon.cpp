@@ -1,4 +1,5 @@
 #include "ui/TrayIcon.h"
+#include "util/I18n.h"
 #include "util/Logger.h"
 
 #include <shellapi.h>
@@ -71,7 +72,7 @@ bool TrayIcon::Init(HWND hwndMessage, const MenuCallbacks& cb) {
   // exists; for now IDI_APPLICATION keeps the binary footprint small.
   nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
   if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_WINLOGO);
-  tooltip_ = L"VMosue";
+  tooltip_ = I18n::Get().TW("app.name");
   CopyWide(nid.szTip, sizeof(nid.szTip) / sizeof(wchar_t), tooltip_.c_str());
 
   added_ = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
@@ -107,16 +108,35 @@ void TrayIcon::SetTooltip(const std::wstring& text) {
   Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
+void TrayIcon::SetPaused(bool paused) {
+  // No NIM_MODIFY needed — the next ShowContextMenu rebuilds the
+  // menu from the current paused_ value. We just store the flag.
+  paused_ = paused;
+}
+
 void TrayIcon::ShowContextMenu(HWND hwnd) {
   HMENU m = CreatePopupMenu();
   if (!m) return;
-  AppendMenuW(m, MF_STRING, kIdTogglePause,  L"Pause/Resume");
+  // Pull localized strings at menu-build time. I18n::TW returns
+  // std::wstring; AppendMenuW takes const wchar_t*, which .c_str()
+  // provides. The narrow keys are the canonical spec keys (e.g.
+  // "tray.pause"). The pause/resume choice is driven by paused_;
+  // App toggles that flag when the user actually flips the state.
+  const std::wstring sPause  = I18n::Get().TW("tray.pause");
+  const std::wstring sResume = I18n::Get().TW("tray.resume");
+  const std::wstring sSet    = I18n::Get().TW("tray.settings");
+  const std::wstring sDbg    = I18n::Get().TW("tray.debug");
+  const std::wstring sTut    = I18n::Get().TW("tray.tutorial");
+  const std::wstring sExit   = I18n::Get().TW("tray.exit");
+
+  AppendMenuW(m, MF_STRING, kIdTogglePause,
+              paused_ ? sResume.c_str() : sPause.c_str());
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING, kIdOpenSettings, L"Settings...");
-  AppendMenuW(m, MF_STRING, kIdOpenDebug,    L"Debug...");
-  AppendMenuW(m, MF_STRING, kIdOpenTutorial, L"Tutorial...");
+  AppendMenuW(m, MF_STRING, kIdOpenSettings, sSet.c_str());
+  AppendMenuW(m, MF_STRING, kIdOpenDebug,    sDbg.c_str());
+  AppendMenuW(m, MF_STRING, kIdOpenTutorial, sTut.c_str());
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(m, MF_STRING, kIdExit,         L"Exit");
+  AppendMenuW(m, MF_STRING, kIdExit,         sExit.c_str());
 
   POINT pt{};
   GetCursorPos(&pt);

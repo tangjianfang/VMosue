@@ -1,0 +1,12 @@
+{
+  "app.name": "VMosue",
+  "tray.pause": "Pause",
+  "tray.resume": "Resume",
+  "tray.settings": "Settings",
+  "tray.debug": "Debug",
+  "tray.tutorial": "Tutorial",
+  "tray.exit": "Exit",
+  "settings.title": "VMosue Settings",
+  "tutorial.welcome": "Welcome to VMosue",
+  "error.camera_lost": "Camera connection lost. Reconnecting..."
+}

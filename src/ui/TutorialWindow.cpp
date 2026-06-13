@@ -1,5 +1,6 @@
 #include "ui/TutorialWindow.h"
 
+#include "util/I18n.h"
 #include "util/Logger.h"
 
 #include <windows.h>
@@ -335,7 +336,22 @@ void TutorialWindow::RenderStep() {
   const StepContent& s = kSteps[currentStep_];
 
   if (hwndTitle_) {
-    SetWindowTextW(hwndTitle_, s.title);
+    // Step 0 (welcome) uses a localized "Welcome to VMosue" tail so
+    // we get translation coverage without translating the entire
+    // 6-step body. The "Step 1/6: " prefix stays in English as a
+    // positional anchor (numbers are universal); only the
+    // descriptive word is localized. For steps 1..5 we use the
+    // literal title directly.
+    if (currentStep_ == 0) {
+      // "Step X/6: <localized welcome>" — only the descriptive
+      // part is translated. We build the wstring on the fly so a
+      // future language switch reflects on the very next Render.
+      std::wstring localized = std::wstring(L"Step 1/6: ") +
+                               I18n::Get().TW("tutorial.welcome");
+      SetWindowTextW(hwndTitle_, localized.c_str());
+    } else {
+      SetWindowTextW(hwndTitle_, s.title);
+    }
   }
   if (hwndBody_) {
     // Replace "\n" with the real newline char so the static
@@ -369,10 +385,6 @@ void TutorialWindow::RenderStep() {
   if (hwndNext_) {
     SetWindowTextW(hwndNext_, NextLabelForStep(currentStep_));
   }
-}
-
-void TutorialWindow::RenderStepStatic(HWND) {
-  if (g_tutorial) g_tutorial->RenderStep();
 }
 
 bool TutorialWindow::SetStep(int newStep) {

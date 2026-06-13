@@ -3,6 +3,7 @@
 #include "capture/CameraCapture.h"
 #include "config/Calibration.h"
 #include "config/Config.h"
+#include "util/I18n.h"
 #include "util/Logger.h"
 
 #include <commctrl.h>
@@ -169,7 +170,7 @@ HWND SettingsWindow::Create(HWND hwndParent) {
       WS_EX_DLGMODALFRAME,  // gives a thinner border than a full
                             // resizable frame, matches dialog look
       kClassName,
-      L"VMosue Settings",
+      I18n::Get().TW("settings.title").c_str(),
       style,
       CW_USEDEFAULT, CW_USEDEFAULT,
       kWindowW, kWindowH,

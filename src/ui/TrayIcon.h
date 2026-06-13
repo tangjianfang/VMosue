@@ -40,6 +40,12 @@ class TrayIcon {
   // Init returns true.
   void SetTooltip(const std::wstring&);
 
+  // Update the pause flag so the next ShowContextMenu picks the
+  // right label (tray.pause vs. tray.resume). The actual pause
+  // state lives in the App; this setter is the way App tells
+  // the tray icon to flip its label.
+  void SetPaused(bool paused);
+
  private:
   // File-scope WndProc forwards through this pointer (set in Init).
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -50,6 +56,9 @@ class TrayIcon {
   UINT iconId_ = 1;                     // stable ID for the tray icon
   std::wstring tooltip_;                // last SetTooltip value
   MenuCallbacks callbacks_{};           // stored copy of callbacks
+  bool paused_ = false;                 // drives tray.pause / tray.resume
+                                        // label; toggled via the menu
+                                        // callback that App supplies.
 };
 
 }  // namespace vmosue
