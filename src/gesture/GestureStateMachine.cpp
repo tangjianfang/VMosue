@@ -9,6 +9,7 @@ Result<void> GestureStateMachine::Init(const Config& c) {
   cursor_.SetConfig(c.cursor);
   click_.SetConfig(c.click);
   airClick_.SetConfig(c.airClick);
+  scroll_.SetConfig(c.scroll);
   return Result<void>::Ok({});
 }
 
@@ -42,6 +43,7 @@ void GestureStateMachine::Reset() {
   cursor_.Reset();
   click_.Reset();
   airClick_.Reset();
+  scroll_.Reset();
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
 }
@@ -80,9 +82,10 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
       }
     }
   }
-  // TODO(Task 19): pass `other` landmarks to ScrollDetector.
+  // Task 19: ScrollDetector consumes the "other" hand's index/middle Y
+  // motion. Returns a wheel delta (positive = scroll up).
+  int scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : 0;
   // TODO(Task 20): pass `other` landmarks to PauseDetector.
-  (void)other;
 
   ActionSet local;
 
@@ -119,6 +122,7 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // the consumer polls slower than the camera frame rate.
   pending_.cursorDx += local.cursorDx;
   pending_.cursorDy += local.cursorDy;
+  pending_.wheel += scrollDelta;
   if (local.leftClick)       pending_.leftClick = true;
   if (local.leftDoubleClick) pending_.leftDoubleClick = true;
   if (local.leftDown)        pending_.leftDown = true;

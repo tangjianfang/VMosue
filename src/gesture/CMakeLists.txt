@@ -9,6 +9,8 @@ add_library(vmosue_gesture STATIC
   ClickDetector.cpp
   AirClickDetector.h
   AirClickDetector.cpp
+  ScrollDetector.h
+  ScrollDetector.cpp
   GestureStateMachine.h
   GestureStateMachine.cpp
 )

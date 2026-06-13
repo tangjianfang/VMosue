@@ -6,6 +6,7 @@ add_executable(vmosue_tests
   unit/test_cursor_controller.cpp
   unit/test_click_detector.cpp
   unit/test_air_click_detector.cpp
+  unit/test_scroll_detector.cpp
   unit/test_input_injector.cpp
   unit/test_state_machine.cpp
 )

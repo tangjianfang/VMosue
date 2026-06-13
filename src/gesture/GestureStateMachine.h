@@ -7,6 +7,7 @@
 #include "gesture/CursorController.h"
 #include "gesture/ClickDetector.h"
 #include "gesture/AirClickDetector.h"
+#include "gesture/ScrollDetector.h"
 #include "util/Result.h"
 
 namespace vmosue {
@@ -28,6 +29,7 @@ class GestureStateMachine {
     CursorController::Config cursor;
     ClickDetector::Config click;
     AirClickDetector::Config airClick;
+    ScrollDetector::Config scroll;
     bool handednessRight = true;  // user-configurable
   };
 
@@ -45,6 +47,7 @@ class GestureStateMachine {
   CursorController cursor_;
   ClickDetector click_;
   AirClickDetector airClick_;
+  ScrollDetector scroll_;
   std::atomic<GlobalState> state_{GlobalState::Active};
   std::mutex actionsMu_;
   ActionSet pending_;
