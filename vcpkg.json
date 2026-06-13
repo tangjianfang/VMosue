@@ -1,0 +1,13 @@
+{
+  "name": "vmosue",
+  "version-string": "0.1.0",
+  "description": "Windows native gesture-controlled mouse app",
+  "license": "Apache-2.0",
+  "dependencies": [
+    "spdlog",
+    "nlohmann-json",
+    "boost-lockfree",
+    "gtest"
+  ],
+  "builtin-baseline": "9e3a78bf79448391654b2490573a06b1bb6085b0"
+}

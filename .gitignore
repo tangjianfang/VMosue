@@ -1,0 +1,34 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.sln
+*.suo
+*.aps
+
+# vcpkg
+vcpkg_installed/
+
+# Generated
+*.log
+*.bak
+*.tmp
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# OS
+.DS_Store
+Thumbs.db
