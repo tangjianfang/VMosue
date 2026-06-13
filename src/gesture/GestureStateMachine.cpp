@@ -2,6 +2,8 @@
 #include "input/InputInjector.h"
 #include "util/Logger.h"
 
+#include <cassert>
+
 namespace vmosue {
 
 Result<void> GestureStateMachine::Init(const Config& c) {
@@ -80,6 +82,9 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
     auto pauseEv = pause_.OnLandmarks(*other, ts);
     if (pauseEv == PauseDetector::Event::PauseToggle) {
       GlobalState cur = state_.load();
+      // EmergencyStopped is already excluded by the outer guard; the
+      // ternary below only needs to distinguish Active vs Paused.
+      assert(cur == GlobalState::Active || cur == GlobalState::Paused);
       GlobalState next = (cur == GlobalState::Paused)
                              ? GlobalState::Active
                              : GlobalState::Paused;

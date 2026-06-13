@@ -55,3 +55,32 @@ TEST(PauseDetector, ResetsOnClose) {
   // at t+1850 (900+1000 hold), toggle
   EXPECT_EQ(d.OnLandmarks(openHand(), t+1850), vmosue::PauseDetector::Event::PauseToggle);
 }
+
+TEST(PauseDetector, DoesNotEmitOnClosedHand) {
+  PauseDetector d;
+  d.SetConfig({});
+  int64_t t = 0;
+  // closed hand held for > 1s should never trigger toggle
+  for (int i = 0; i <= 15; ++i) {
+    EXPECT_EQ(d.OnLandmarks(closedHand(), t + i * 100), vmosue::PauseDetector::Event::None);
+  }
+}
+
+TEST(PauseDetector, SupportsMultipleToggleCycles) {
+  PauseDetector d;
+  d.SetConfig({});
+  int64_t t = 0;
+  // First open 1s -> toggle
+  d.OnLandmarks(openHand(), t);
+  d.OnLandmarks(openHand(), t + 500);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 1100), vmosue::PauseDetector::Event::PauseToggle);
+  // Close + reopen -> second toggle
+  EXPECT_EQ(d.OnLandmarks(closedHand(), t + 1200), vmosue::PauseDetector::Event::None);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 1300), vmosue::PauseDetector::Event::None);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 1800), vmosue::PauseDetector::Event::None);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 2400), vmosue::PauseDetector::Event::PauseToggle);
+  // Third cycle
+  EXPECT_EQ(d.OnLandmarks(closedHand(), t + 2500), vmosue::PauseDetector::Event::None);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 2600), vmosue::PauseDetector::Event::None);
+  EXPECT_EQ(d.OnLandmarks(openHand(), t + 3700), vmosue::PauseDetector::Event::PauseToggle);
+}
