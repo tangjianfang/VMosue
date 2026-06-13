@@ -10,6 +10,7 @@
 #include "inference/HandDetector.h"
 #include "inference/LandmarkSmoother.h"
 #include "gesture/GestureStateMachine.h"
+#include "ui/DebugWindow.h"
 #include "ui/OverlayWindow.h"
 #include "ui/SettingsWindow.h"
 #include "ui/TrayIcon.h"
@@ -83,6 +84,12 @@ class App {
   // the tray icon's "Settings" menu item, hidden (not destroyed) in
   // Shutdown so reopening is instant. unique_ptr owns the lifetime.
   std::unique_ptr<SettingsWindow> settings_;
+  // Task 29: modeless Debug window. Created in Run() (so the tray
+  // menu callback can Show() it on demand), hidden + joined in
+  // Shutdown(). Lifetime: app process. The window itself owns its
+  // D2D resources and 10Hz update thread; the App just wires the
+  // tray menu and the producer side of the debug queues.
+  std::unique_ptr<DebugWindow> debug_;
 
   // Task 26: a hidden message-only window that owns the tray icon
   // callbacks. TrayIcon::Shutdown() does NOT destroy this window;
@@ -102,6 +109,22 @@ class App {
   boost::lockfree::spsc_queue<std::vector<HandLandmarks>,
                               boost::lockfree::capacity<4>>
       landmarkQ_;
+
+  // Task 29: mirror queues feeding the DebugWindow. The capture
+  // loop pushes the same Frame it pushes to frameQ_ onto
+  // debugFrameQ_; the inference loop pushes the same smoothed
+  // hand set it pushes to landmarkQ_ onto debugLandmarkQ_. The
+  // DebugWindow's update thread is the sole consumer of each. We
+  // keep these queues independent of the main pipeline so a slow
+  // debug consumer (or a hidden debug window) cannot back-pressure
+  // the production path. drop-on-full is the right policy here:
+  // a debug visualization that lags by one frame is fine, a
+  // production mouse that lags is not.
+  boost::lockfree::spsc_queue<Frame, boost::lockfree::capacity<2>>
+      debugFrameQ_;
+  boost::lockfree::spsc_queue<std::vector<HandLandmarks>,
+                              boost::lockfree::capacity<4>>
+      debugLandmarkQ_;
 };
 
 }  // namespace vmosue

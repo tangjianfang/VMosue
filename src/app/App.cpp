@@ -179,7 +179,17 @@ int App::Run() {
       if (settings_) settings_->Show();
       else           VMOSUE_LOG_WARN("Tray: Settings unavailable");
     };
-    cb.onOpenDebug    = []()  { VMOSUE_LOG_INFO("Tray: Debug (not implemented yet)"); };
+    cb.onOpenDebug    = [this]() {
+      if (debug_) {
+        // Log a one-shot "debug opened" line so the action log in
+        // the debug window itself shows when the user clicked the
+        // tray item (only visible if they re-open the window).
+        debug_->PushLog(L"Tray: Debug window opened");
+        debug_->Show();
+      } else {
+        VMOSUE_LOG_WARN("Tray: Debug unavailable");
+      }
+    };
     cb.onOpenTutorial = []()  { VMOSUE_LOG_INFO("Tray: Tutorial (not implemented yet)"); };
     cb.onExit         = [this]() { VMOSUE_LOG_INFO("Tray: Exit requested"); Shutdown(); };
     if (!tray_.Init(trayMsgWnd_, cb)) {
@@ -199,6 +209,19 @@ int App::Run() {
   if (!settings_->Create(trayMsgWnd_)) {
     VMOSUE_LOG_WARN("SettingsWindow init failed");
     settings_.reset();
+  }
+
+  // Task 29: build the debug window. Same lifetime model as the
+  // settings window: parented to the tray message window, created
+  // in the hidden state, shown on demand by the tray's "Debug"
+  // menu item, hidden in Shutdown. The 10Hz update thread starts
+  // on the first Show() and stays running until Shutdown() joins
+  // it. Failure to create is non-fatal: the tray's callback
+  // already logs "Debug unavailable" if debug_ is null.
+  debug_ = std::make_unique<DebugWindow>();
+  if (!debug_->Create(trayMsgWnd_)) {
+    VMOSUE_LOG_WARN("DebugWindow init failed");
+    debug_.reset();
   }
 
   // Task 21: register the two emergency-stop triggers. Both call into
@@ -283,6 +306,12 @@ void App::Shutdown() {
   // hidden window when it goes out of scope.
   if (settings_) settings_->Hide();
 
+  // Task 29: tear down the debug window. Shutdown() joins the
+  // 10Hz update thread, releases the D2D factory / render target,
+  // and destroys the HWND. We do this BEFORE the tray message
+  // window goes away (the debug window is parented to it).
+  if (debug_) debug_->Shutdown();
+
   // Task 26: tear the tray icon down BEFORE the message-only window.
   // Shell_NotifyIcon(NIM_DELETE) needs the HWND to be valid; if we
   // destroyed the window first the shell would leak the icon until
@@ -331,6 +360,13 @@ void App::captureLoop() {
         // configured captureFps, the inference thread pulls at
         // inferenceFps, so the queue depth stays bounded.
         frameQ_.push(f);
+        // Task 29: mirror the same frame to the debug queue. The
+        // debug queue is independent of the production pipeline so
+        // a slow / hidden debug consumer cannot back-pressure the
+        // real capture -> inference path. push() is no-throw; on a
+        // full queue the frame is dropped (acceptable: the next
+        // frame will arrive in <=33ms at 30fps).
+        debugFrameQ_.push(f);
       }
 
       // Sleep for the remainder of the period. If the loop body
@@ -389,6 +425,11 @@ void App::inferenceLoop() {
         // SPSC: same drop-on-full semantics as the capture queue. We
         // move() to avoid a deep copy of the HandLandmarks arrays.
         landmarkQ_.push(std::move(hands));
+        // Task 29: mirror to the debug queue. We have to copy
+        // (not move) because the state machine loop is the
+        // primary consumer of the moved-from set. The copy is
+        // cheap relative to the inference cost it shadows.
+        debugLandmarkQ_.push(hands);
       }
 
       // Throttle the loop to the configured inference rate. The
@@ -480,8 +521,43 @@ void App::stateMachineLoop() {
         if (acts.wheel != 0) {
           inj.Wheel(acts.wheel);
         }
+
+        // Task 29: publish a one-line summary of the action set to
+        // the debug window's action log. We only push the "interesting"
+        // events (anything that actually mutates OS state) — empty
+        // action sets are the common case and would flood the log
+        // at 30Hz. Format mirrors the action log convention.
+        if (debug_ && (acts.leftClick || acts.leftDoubleClick ||
+                       acts.leftDown || acts.leftUp || acts.rightClick ||
+                       acts.cursorDx != 0 || acts.cursorDy != 0 ||
+                       acts.wheel != 0 || acts.safeRelease)) {
+          wchar_t buf[128];
+          swprintf_s(buf,
+              L"sm: click=%d dclick=%d down=%d up=%d rclick=%d "
+              L"dx=%d dy=%d wheel=%d",
+              acts.leftClick ? 1 : 0,
+              acts.leftDoubleClick ? 1 : 0,
+              acts.leftDown ? 1 : 0,
+              acts.leftUp ? 1 : 0,
+              acts.rightClick ? 1 : 0,
+              acts.cursorDx, acts.cursorDy, acts.wheel);
+          debug_->PushLog(buf);
+        }
       } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+
+      // Task 29: publish state + FPS rolling averages to the
+      // debug window. The state machine ticks are derived from
+      // the perf-mode inferenceFps when data is flowing; for v0.2
+      // we just report that as the state machine rate. The
+      // capture and inference FPS are computed inside their own
+      // loops (see below) using a 1Hz sliding counter.
+      if (debug_) {
+        const PerfMode mode = CurrentPerfMode();
+        const double smFps = static_cast<double>(mode.inferenceFps);
+        debug_->PushFps(0.0, 0.0, smFps);
+        debug_->PushState(static_cast<int>(sm_.State()));
       }
     }
   } catch (const std::exception& e) {
