@@ -32,7 +32,12 @@ std::optional<std::function<void()>> g_esc_;
 int g_escHoldMs_ = 1000;
 std::atomic<bool> running_{false};
 std::thread watcher_;
-std::atomic<bool> gArmed_{true};  // re-arm latch shared by both hotkeys
+// Per-hotkey re-arm latches. Each hotkey arms/disarms itself on its own
+// key transition; sharing one latch across both would let, e.g., an
+// Esc-hold silently disarm Ctrl+Alt+G (or vice versa) until the other
+// key cycled, which is confusing for the user.
+std::atomic<bool> gCtrlAltGArmed_{true};
+std::atomic<bool> gEscArmed_{true};
 
 bool any_registered_locked() {
   return g_ctrlAltG_.has_value() || g_esc_.has_value();
@@ -40,13 +45,13 @@ bool any_registered_locked() {
 
 void start_watcher_locked() {
   if (running_.exchange(true)) return;
-  gArmed_.store(true);
+  gCtrlAltGArmed_.store(true);
+  gEscArmed_.store(true);
   watcher_ = std::thread([]() {
     using namespace std::chrono;
-    // Ctrl+Alt+G re-arm latch: after the chord fires we wait for G to be
-    // released before allowing another trigger. Held in the lambda via
-    // static-by-capture is not possible; we use atomic on the lambda's
-    // own state.
+    // Lambda-local edge-detection state. We do not use static-by-capture;
+    // these are per-thread (per watcher instance) and reset every time
+    // the watcher starts.
     bool gPrevDown = false;
     bool escPrevDown = false;
     auto escDownSince = steady_clock::time_point{};
@@ -64,7 +69,8 @@ void start_watcher_locked() {
         escHoldMs = g_escHoldMs_;
       }
 
-      bool armed = gArmed_.load();
+      bool gArmed = gCtrlAltGArmed_.load();
+      bool escArmed = gEscArmed_.load();
 
 #ifdef _WIN32
       // Ctrl and Alt: GetAsyncKeyState returns the high bit set if the
@@ -76,10 +82,10 @@ void start_watcher_locked() {
       bool escDown  = (GetAsyncKeyState(VK_ESCAPE)  & 0x8000) != 0;
 
       // Ctrl+Alt+G: fire when all three are down AND we're armed.
-      // After firing, latch `armed` low until G is released.
+      // After firing, latch `gArmed` low until G is released.
       if (cbG && ctrlDown && altDown && gDown) {
-        if (armed) {
-          gArmed_.store(false);
+        if (gArmed) {
+          gCtrlAltGArmed_.store(false);
           try {
             (*cbG)();
           } catch (...) {
@@ -89,7 +95,7 @@ void start_watcher_locked() {
       }
       // Re-arm when G goes from down -> up.
       if (gPrevDown && !gDown) {
-        gArmed_.store(true);
+        gCtrlAltGArmed_.store(true);
       }
       gPrevDown = gDown;
 
@@ -101,8 +107,8 @@ void start_watcher_locked() {
         } else if (escDown && escPrevDown) {
           auto held = duration_cast<milliseconds>(
                           steady_clock::now() - escDownSince).count();
-          if (armed && held >= escHoldMs) {
-            gArmed_.store(false);
+          if (escArmed && held >= escHoldMs) {
+            gEscArmed_.store(false);
             try {
               (*cbEsc)();
             } catch (...) {
@@ -111,7 +117,7 @@ void start_watcher_locked() {
           }
         } else if (!escDown && escPrevDown) {
           // Released: re-arm for next press.
-          gArmed_.store(true);
+          gEscArmed_.store(true);
           escDownSince = {};
         }
         escPrevDown = escDown;
@@ -125,7 +131,8 @@ void start_watcher_locked() {
       (void)altDown;
       (void)gDown;
       (void)escDown;
-      (void)armed;
+      (void)gArmed;
+      (void)escArmed;
       (void)escHoldMs;
 #endif
 
@@ -159,7 +166,8 @@ void Hotkey::UnregisterCtrlAltG() {
   // registered the watcher must keep running anyway.
   if (!any_registered_locked()) {
     stop_watcher_locked();
-    gArmed_.store(true);
+    gCtrlAltGArmed_.store(true);
+    gEscArmed_.store(true);
   }
 }
 
@@ -178,7 +186,8 @@ void Hotkey::UnregisterEsc() {
   g_esc_.reset();
   if (!any_registered_locked()) {
     stop_watcher_locked();
-    gArmed_.store(true);
+    gCtrlAltGArmed_.store(true);
+    gEscArmed_.store(true);
   }
 }
 
@@ -187,7 +196,8 @@ void Hotkey::Shutdown() {
   g_ctrlAltG_.reset();
   g_esc_.reset();
   stop_watcher_locked();
-  gArmed_.store(true);
+  gCtrlAltGArmed_.store(true);
+  gEscArmed_.store(true);
 }
 
 }  // namespace vmosue
