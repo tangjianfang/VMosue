@@ -71,6 +71,13 @@ void App::Shutdown() {
   // joins everything; subsequent calls early-out.
   if (!running_.exchange(false)) return;
 
+  // Task 21: unregister the two emergency-stop hotkeys so their
+  // watcher thread is joined before we tear down the rest of the
+  // app. Otherwise the watcher can outlive the destructors of the
+  // lambdas it captured (sm_, this) and crash on the next callback.
+  Hotkey::UnregisterCtrlAltG();
+  Hotkey::UnregisterEsc();
+
   if (captureT_.joinable()) captureT_.join();
   if (inferenceT_.joinable()) inferenceT_.join();
   if (smT_.joinable()) smT_.join();
