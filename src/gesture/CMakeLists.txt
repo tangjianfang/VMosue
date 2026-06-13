@@ -5,6 +5,8 @@
 add_library(vmosue_gesture STATIC
   CursorController.h
   CursorController.cpp
+  ClickDetector.h
+  ClickDetector.cpp
 )
 target_include_directories(vmosue_gesture PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(vmosue_gesture PUBLIC vmosue_util vmosue_inference)

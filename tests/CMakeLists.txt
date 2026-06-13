@@ -4,6 +4,7 @@ add_executable(vmosue_tests
   unit/test_result.cpp
   unit/test_one_euro_filter.cpp
   unit/test_cursor_controller.cpp
+  unit/test_click_detector.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util
