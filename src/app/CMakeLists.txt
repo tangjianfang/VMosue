@@ -2,6 +2,8 @@ add_executable(vmosue WIN32
   main.cpp
   App.h
   App.cpp
+  Watchdog.h
+  Watchdog.cpp
 )
 target_link_libraries(vmosue PRIVATE
   vmosue_util

@@ -1,5 +1,6 @@
 #include "app/App.h"
 
+#include "app/Watchdog.h"
 #include "input/InputInjector.h"
 #include "platform/Hotkey.h"
 #include "util/Logger.h"
@@ -52,6 +53,20 @@ int App::Run() {
   inferenceT_ = std::thread(&App::inferenceLoop, this);
   smT_ = std::thread(&App::stateMachineLoop, this);
 
+  // Task 24: register each worker with the watchdog and start the
+  // health monitor. 5s timeout gives plenty of slack over the
+  // ~33ms-per-frame cadence — a thread that hasn't heartbeated for
+  // 5s is in serious trouble (blocked on I/O, deadlocked, or
+  // crashed). The callback just logs; a future task can escalate to
+  // tearing the app down on persistent timeouts.
+  auto& wd = Watchdog::Get();
+  wd.RegisterThread(captureT_.get_id(), "capture", std::chrono::seconds(5));
+  wd.RegisterThread(inferenceT_.get_id(), "inference", std::chrono::seconds(5));
+  wd.RegisterThread(smT_.get_id(), "stateMachine", std::chrono::seconds(5));
+  wd.Start([](const std::string& name) {
+    VMOSUE_LOG_WARN("Watchdog timeout: {}", name);
+  });
+
   VMOSUE_LOG_INFO("App started. Press Ctrl+C in console to exit.");
 
   // Main thread just sleeps until Shutdown() flips running_. A real
@@ -82,6 +97,13 @@ void App::Shutdown() {
   if (inferenceT_.joinable()) inferenceT_.join();
   if (smT_.joinable()) smT_.join();
 
+  // Task 24: stop the watchdog AFTER the workers are joined, so
+  // the watcher thread can never observe a stale thread id and so
+  // we don't fire a spurious timeout during teardown. Stop is
+  // idempotent so the second Shutdown() call from the destructor
+  // is a no-op.
+  Watchdog::Get().Stop();
+
   cam_.Stop();
 
   overlay_.Shutdown();
@@ -94,6 +116,12 @@ void App::Shutdown() {
 void App::captureLoop() {
   try {
     while (running_.load()) {
+      // Task 24: heartbeating at the top of the loop means a
+      // thread that is alive and scheduling gets a tick at least
+      // once per iteration. Heartbeat is internally throttled to
+      // 1Hz so the lock cost is negligible even though we run
+      // ~1000Hz here.
+      Watchdog::Get().Heartbeat(std::this_thread::get_id());
       Frame f;
       if (cam_.TryGetLatestFrame(f)) {
         // SPSC: push() only fails if the queue is full, in which case
@@ -115,6 +143,8 @@ void App::captureLoop() {
 void App::inferenceLoop() {
   try {
     while (running_.load()) {
+      // Task 24: see captureLoop().
+      Watchdog::Get().Heartbeat(std::this_thread::get_id());
       Frame f;
       if (frameQ_.pop(f)) {
         auto hands = detector_.Detect(f);
@@ -139,6 +169,8 @@ void App::stateMachineLoop() {
   try {
     auto last = std::chrono::steady_clock::now();
     while (running_.load()) {
+      // Task 24: see captureLoop().
+      Watchdog::Get().Heartbeat(std::this_thread::get_id());
       std::vector<HandLandmarks> hands;
       if (landmarkQ_.pop(hands)) {
         auto now = std::chrono::steady_clock::now();

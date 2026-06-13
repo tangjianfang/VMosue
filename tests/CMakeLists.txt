@@ -12,6 +12,7 @@ add_executable(vmosue_tests
   unit/test_state_machine.cpp
   unit/test_calibration.cpp
   unit/test_config.cpp
+  unit/test_watchdog.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util
