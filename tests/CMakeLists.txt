@@ -1,2 +1,11 @@
-# Tests placeholder; sources added in later tasks.
-# Required to exist because the root CMakeLists.txt calls add_subdirectory(tests) when VMOSUE_BUILD_TESTS is ON.
+add_subdirectory(unit)
+
+add_executable(vmosue_tests
+  unit/test_result.cpp
+)
+target_link_libraries(vmosue_tests PRIVATE
+  vmosue_util
+  GTest::gtest_main
+)
+include(GoogleTest)
+gtest_discover_tests(vmosue_tests)
