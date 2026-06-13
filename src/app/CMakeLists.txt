@@ -9,11 +9,12 @@ target_link_libraries(vmosue PRIVATE
   vmosue_inference
   vmosue_gesture
   vmosue_input
+  vmosue_ui
   Threads::Threads
   Boost::boost
 )
 
-# NOTE: This list intentionally omits vmosue_ui, vmosue_config, and
-# vmosue_platform. They are forward references to Tasks 15, 19, 24, 25,
+# NOTE: This list intentionally omits vmosue_config and
+# vmosue_platform. They are forward references to Tasks 19, 24, 25,
 # etc. which have not landed yet. Add them to the link list as those
 # tasks land.

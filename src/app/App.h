@@ -8,6 +8,7 @@
 #include "inference/HandDetector.h"
 #include "inference/LandmarkSmoother.h"
 #include "gesture/GestureStateMachine.h"
+#include "ui/OverlayWindow.h"
 
 namespace vmosue {
 
@@ -53,6 +54,7 @@ class App {
   HandDetector detector_;
   LandmarkSmoother smoother_;
   GestureStateMachine sm_;
+  OverlayWindow overlay_;
 
   // SPSC queue between T1 (producer) and T2 (consumer). Capacity 2
   // gives one slot of slack without forcing the producer to block.

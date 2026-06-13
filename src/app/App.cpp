@@ -35,6 +35,8 @@ int App::Run() {
 
   sm_.Init({});
 
+  if (!overlay_.Init(nullptr)) VMOSUE_LOG_WARN("Overlay init failed");
+
   cam_.Start();
   captureT_ = std::thread(&App::captureLoop, this);
   inferenceT_ = std::thread(&App::inferenceLoop, this);
@@ -64,6 +66,8 @@ void App::Shutdown() {
   if (smT_.joinable()) smT_.join();
 
   cam_.Stop();
+
+  overlay_.Shutdown();
 
   // Belt-and-braces: make sure the OS cursor state is sane before the
   // process goes away. SafeReleaseAll() is a no-op if nothing is held.
@@ -127,6 +131,25 @@ void App::stateMachineLoop() {
         sm_.OnLandmarks(hands, NowMicros() / 1000, dt);
         auto acts = sm_.ConsumeActions();
         auto& inj = InputInjector::Get();
+
+        // Build Feedback for the overlay from the right-hand landmarks
+        // (index MCP, point 5) and the current state.
+        const HandLandmarks* right = nullptr;
+        for (const auto& h : hands) {
+          if (h.handedness == 1) { right = &h; break; }
+        }
+        Feedback fb{};
+        if (right) {
+          fb.cursorX = right->points[5].x;
+          fb.cursorY = right->points[5].y;
+          fb.confidence = right->score;
+          fb.rightHandCount = 1;
+        }
+        for (const auto& h : hands) {
+          if (h.handedness == 0) { fb.leftHandCount = 1; break; }
+        }
+        fb.paused = (sm_.State() == GlobalState::Paused);
+        overlay_.Update(fb);
 
         // Emergency stop: the GestureStateMachine has tripped a safe
         // release. Clear any held LMB, flush the OS state, and exit
