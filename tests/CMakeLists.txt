@@ -10,11 +10,13 @@ add_executable(vmosue_tests
   unit/test_pause_detector.cpp
   unit/test_input_injector.cpp
   unit/test_state_machine.cpp
+  unit/test_calibration.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util
   vmosue_gesture
   vmosue_input
+  vmosue_config
   GTest::gtest_main
 )
 include(GoogleTest)
