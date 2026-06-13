@@ -25,7 +25,8 @@ int ScrollDetector::OnLandmarks(const HandLandmarks& left, int64_t ts) {
         break;
       }
       if ((ts - phaseStartMs_) < cfg_.enterHoldMs) {
-        // hold not yet complete; don't emit
+        // Hold not yet complete: don't emit, but keep tracking so we don't
+        // treat the post-hold frame as a sudden jump of (holdStartY -> nowY).
         lastIndexY_ = left.points[8].y;
         break;
       }
