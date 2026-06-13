@@ -1,36 +1,66 @@
 #pragma once
-// InputInjector - abstracts OS-level input synthesis (mouse, keyboard).
+// InputInjector - synthesizes OS-level mouse and keyboard input on Windows
+// via the SendInput() Win32 API.
 //
-// This file is a STUB introduced in Task 9 (CursorController) so that the
-// gesture module has a stable, compileable dependency on the input module.
-// The real implementation (SendInput wrappers, virtual-key synthesis, etc.)
-// lands in Task 12. CursorController.cpp currently calls into this API but
-// the call site is commented out until Task 12 wires it up.
+// Task 12 (replaces the Task 9 stub). The API surface here is the canonical
+// one consumed by the gesture module (CursorController, GestureStateMachine,
+// AirClickDetector, etc.) and the emergency-stop / hotkey layers.
 //
-// API shape is deliberately minimal: a static Get() singleton plus a small
-// set of methods. Do not extend this surface without a plan update.
+// Design notes:
+// - Process-wide singleton (Get()) so the gesture loop and any
+//   emergency-stop / watchdog code share one state machine. The atomic
+//   leftDown_ flag is the canonical "is the left mouse button logically
+//   held" state; SafeReleaseAll() is the single place that can
+//   unconditionally force-release it (used on shutdown, emergency stop,
+//   and pause).
+// - SendInput() requires the calling thread to be in a desktop session
+//   that "knows" about the user input state. When run from a service or
+//   non-interactive session SendInput returns 0. We log and continue.
+// - This header deliberately does NOT include <windows.h>. The public
+//   surface uses only standard types (int, bool) so callers do not pull
+//   in the Windows SDK header. The .cpp file is the only place that
+//   needs the Win32 API.
+
+#include <atomic>
+
 namespace vmosue {
 
 class InputInjector {
  public:
-  // Returns the process-wide injector instance. Safe to call before Init();
-  // methods that need a real backend will no-op or return false in that case.
   static InputInjector& Get();
 
-  // Move the system cursor by (dx, dy) pixels relative to its current
-  // position. dx>0 is right, dy>0 is down (screen coordinates).
+  // Move the system cursor by (dx, dy) pixels (relative). No-op when both
+  // are zero so we don't issue spurious SendInput calls.
   void MoveCursor(int dx, int dy);
 
-  // Press / release the primary (left) mouse button.
-  void MouseDown();
-  void MouseUp();
+  // Atomic down/up of the primary (left) mouse button. Down is a no-op
+  // when the button is already logically held; Up is a no-op when it is
+  // not held.
+  void LeftDown();
+  void LeftUp();
 
-  // Press / release a virtual-key code (VK_LBUTTON, VK_RBUTTON, ...).
-  void KeyDown(int vk);
-  void KeyUp(int vk);
+  // Convenience: LeftDown + LeftUp. Always leaves the button released.
+  void LeftClick();
+
+  // Right-click is a discrete gesture (no state tracking) so we just emit
+  // down + up unconditionally.
+  void RightClick();
+
+  // Vertical scroll. Positive delta scrolls away from the user (Windows
+  // convention: WHEEL_DELTA = 120 is one notch).
+  void Wheel(int delta);
+
+  // Unconditionally release any logically-held buttons and any modifier
+  // keys (shift, ctrl, alt) we may have left behind. Safe to call from
+  // emergency stop, pause, and process shutdown paths. Idempotent.
+  void SafeReleaseAll();
+
+  bool IsLeftDown() const { return leftDown_.load(); }
 
  private:
-  InputInjector() = default;
+  InputInjector();
+
+  std::atomic<bool> leftDown_{false};
 };
 
 }  // namespace vmosue
