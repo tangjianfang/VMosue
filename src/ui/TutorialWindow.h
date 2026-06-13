@@ -76,10 +76,6 @@ class TutorialWindow {
   // reflect the current step_. Called after every step change.
   void RenderStep();
 
-  // Forward to RenderStep() so the static WndProc can call it
-  // without an instance pointer in scope.
-  static void RenderStepStatic(HWND hwnd);
-
   // Set currentStep_ and update the controls. Clamps to [0, 5].
   // Returns true if the step actually changed.
   bool SetStep(int newStep);
