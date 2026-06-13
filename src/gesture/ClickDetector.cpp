@@ -8,6 +8,8 @@ void ClickDetector::Reset() {
   phase_ = Phase::Idle;
   pinchStartMs_ = 0;
   lastClickMs_.reset();
+  pendingSingleClick_ = false;
+  pendingSingleClickStartMs_ = 0;
 }
 
 static float dist2D(const Point2F& a, const Point2F& b) {
@@ -20,6 +22,15 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
   // Thumb tip = 4, index tip = 8
   float d = dist2D(right.points[4], right.points[8]);
   ClickEvent ev = ClickEvent::None;
+  // Check if a pending (held) single click has expired; if so, emit it now.
+  // We do this at the start of each frame so the caller sees the click on
+  // the very next OnLandmarks call after the window elapses.
+  if (pendingSingleClick_
+      && (ts - pendingSingleClickStartMs_) >= cfg_.doubleClickWindowMs) {
+    ev = ClickEvent::LeftClick;
+    pendingSingleClick_ = false;
+    return ev;
+  }
   switch (phase_) {
     case Phase::Idle:
       if (d < cfg_.pinchThresholdNorm) {
@@ -32,9 +43,24 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
         // Released; emit click or down+up
         bool isDouble = lastClickMs_.has_value()
                      && (ts - *lastClickMs_) < cfg_.doubleClickWindowMs;
-        ev = isDouble ? ClickEvent::LeftDoubleClick : ClickEvent::LeftClick;
-        lastClickMs_ = ts;
-        phase_ = Phase::Idle;
+        if (isDouble) {
+          ev = ClickEvent::LeftDoubleClick;
+          lastClickMs_ = ts;
+          phase_ = Phase::Idle;
+          // A pending single click is consumed by the double-click; discard it.
+          pendingSingleClick_ = false;
+        } else if (cfg_.suppressSingleClickInDoubleWindow) {
+          // Hold the click until the window expires; if a second click
+          // arrives in time, it will be promoted to a LeftDoubleClick.
+          pendingSingleClick_ = true;
+          pendingSingleClickStartMs_ = ts;
+          lastClickMs_ = ts;
+          phase_ = Phase::Idle;
+        } else {
+          ev = ClickEvent::LeftClick;
+          lastClickMs_ = ts;
+          phase_ = Phase::Idle;
+        }
       } else if ((ts - pinchStartMs_) > cfg_.holdForDragMs) {
         ev = ClickEvent::LeftDragStart;
         phase_ = Phase::Held;

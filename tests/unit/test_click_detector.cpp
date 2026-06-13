@@ -84,3 +84,17 @@ TEST(ClickDetector, EmitsDragStartOnLongPinch) {
   EXPECT_EQ(d.OnLandmarks(makeHand(0.02f), t + 300), vmosue::ClickEvent::LeftDragStart);
   EXPECT_EQ(d.OnLandmarks(makeHand(0.10f), t + 400), vmosue::ClickEvent::LeftDragEnd);
 }
+
+TEST(ClickDetector, SuppressSingleInDoubleWindow) {
+  ClickDetector d;
+  vmosue::ClickDetector::Config c;
+  c.suppressSingleClickInDoubleWindow = true;
+  d.SetConfig(c);
+  int64_t t = 0;
+  d.OnLandmarks(makeHand(0.10f), t);
+  d.OnLandmarks(makeHand(0.02f), t + 50);
+  EXPECT_EQ(d.OnLandmarks(makeHand(0.10f), t + 100), vmosue::ClickEvent::None);  // suppressed
+  d.OnLandmarks(makeHand(0.10f), t + 200);
+  d.OnLandmarks(makeHand(0.02f), t + 250);
+  EXPECT_EQ(d.OnLandmarks(makeHand(0.10f), t + 300), vmosue::ClickEvent::LeftDoubleClick);
+}
