@@ -190,7 +190,10 @@ int App::Run() {
         VMOSUE_LOG_WARN("Tray: Debug unavailable");
       }
     };
-    cb.onOpenTutorial = []()  { VMOSUE_LOG_INFO("Tray: Tutorial (not implemented yet)"); };
+    cb.onOpenTutorial = [this]()  {
+      if (tutorial_) tutorial_->Show();
+      else           VMOSUE_LOG_WARN("Tray: Tutorial unavailable");
+    };
     cb.onExit         = [this]() { VMOSUE_LOG_INFO("Tray: Exit requested"); Shutdown(); };
     if (!tray_.Init(trayMsgWnd_, cb)) {
       VMOSUE_LOG_WARN("Tray icon init failed");
@@ -224,6 +227,19 @@ int App::Run() {
     debug_.reset();
   }
 
+  // Task 30: build the 6-step tutorial window. Parented to the
+  // tray message window (hidden), created in the hidden state, and
+  // shown on demand by the tray's "Tutorial" menu item. The
+  // showTutorialOnLaunch check below auto-shows the window ~3s
+  // after startup if the user has not disabled that flag in the
+  // config. Failure to create is non-fatal: the tray's callback
+  // already logs "Tutorial unavailable" if tutorial_ is null.
+  tutorial_ = std::make_unique<TutorialWindow>();
+  if (!tutorial_->Init(trayMsgWnd_)) {
+    VMOSUE_LOG_WARN("TutorialWindow init failed");
+    tutorial_.reset();
+  }
+
   // Task 21: register the two emergency-stop triggers. Both call into
   // the state machine which sets state_=EmergencyStopped, drains
   // pending actions, and runs SafeReleaseAll on the InputInjector.
@@ -254,6 +270,19 @@ int App::Run() {
 
   VMOSUE_LOG_INFO("App started. Press Ctrl+C in console to exit.");
 
+  // Task 30: if the user has AppConfig::showTutorialOnLaunch set
+  // (the in-class default is `true` for a fresh install; existing
+  // users can opt out via the config), auto-show the tutorial
+  // window after a short delay. The delay gives the main UI time
+  // to appear (the tray icon is registered, the overlay is up)
+  // before a tutorial window pops in front of it. We use the
+  // message-pump's `steady_clock` checkpoints to fire the show
+  // ~3s into the run; if the user dismisses the tutorial (or
+  // never opens the menu), Shutdown() will tear it down cleanly.
+  const auto tutorialLaunchAt = std::chrono::steady_clock::now() +
+                                std::chrono::seconds(3);
+  bool tutorialAutoShown = !Config::Get().Data().showTutorialOnLaunch;
+
   // Main thread pumps messages from the tray message-only window so
   // the tray icon callbacks can dispatch. We also use the running_
   // flag as a "quit" signal: when Shutdown() flips it, we break out
@@ -265,6 +294,18 @@ int App::Run() {
     if (got == 0 || got == -1) break;  // WM_QUIT or error
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
+
+    // Task 30: cheap deadline check on every pump iteration. The
+    // overhead is a single steady_clock::now() call, no lock or
+    // syscall. We check `running_` again so a Shutdown() that
+    // races the deadline doesn't try to show a window whose
+    // parent is in the middle of being destroyed.
+    if (!tutorialAutoShown && tutorial_ &&
+        std::chrono::steady_clock::now() >= tutorialLaunchAt &&
+        running_.load()) {
+      tutorial_->Show();
+      tutorialAutoShown = true;
+    }
   }
 
   Shutdown();
@@ -311,6 +352,13 @@ void App::Shutdown() {
   // and destroys the HWND. We do this BEFORE the tray message
   // window goes away (the debug window is parented to it).
   if (debug_) debug_->Shutdown();
+
+  // Task 30: tear down the tutorial window. Shutdown() destroys
+  // the HWND. We do this BEFORE the tray message window goes
+  // away (the tutorial window is parented to it) and after the
+  // debug window since both share the same parent and the debug
+  // window's WM_DESTROY will pump a few final messages.
+  if (tutorial_) tutorial_->Shutdown();
 
   // Task 26: tear the tray icon down BEFORE the message-only window.
   // Shell_NotifyIcon(NIM_DELETE) needs the HWND to be valid; if we

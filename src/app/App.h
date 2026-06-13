@@ -14,6 +14,7 @@
 #include "ui/OverlayWindow.h"
 #include "ui/SettingsWindow.h"
 #include "ui/TrayIcon.h"
+#include "ui/TutorialWindow.h"
 
 namespace vmosue {
 
@@ -90,6 +91,14 @@ class App {
   // D2D resources and 10Hz update thread; the App just wires the
   // tray menu and the producer side of the debug queues.
   std::unique_ptr<DebugWindow> debug_;
+  // Task 30: modeless 6-step tutorial window. Created in Run() so
+  // the tray menu callback can Show() it on demand. If the user
+  // has AppConfig::showTutorialOnLaunch set, the App also auto-
+  // shows the window ~3 seconds after the main UI has appeared
+  // (see App::Run()). Shutdown() tears it down after the tray
+  // message window so the parent's DestroyWindow can't pull the
+  // child out from under it.
+  std::unique_ptr<TutorialWindow> tutorial_;
 
   // Task 26: a hidden message-only window that owns the tray icon
   // callbacks. TrayIcon::Shutdown() does NOT destroy this window;
