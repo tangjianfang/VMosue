@@ -3,6 +3,8 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <atlbase.h>
+#include <mfreadwrite.h>
 #include "capture/Frame.h"
 #include "util/Result.h"
 
@@ -30,7 +32,6 @@ class CameraCapture {
 
  private:
   void captureLoop();
-
   Config cfg_;
   std::thread thread_;
   std::atomic<bool> running_{false};
@@ -38,6 +39,7 @@ class CameraCapture {
   std::mutex frameMutex_;
   std::condition_variable frameCv_;
   bool hasFrame_ = false;
+  CComPtr<IMFSourceReader> reader_;
 };
 
 }  // namespace vmosue
