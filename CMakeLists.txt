@@ -16,6 +16,24 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 option(VMOSUE_BUILD_TESTS "Build unit tests" ON)
+option(VMOSUE_COVERAGE "Enable coverage instrumentation (gcov on GCC/Clang)" OFF)
+
+# Coverage instrumentation. The spec snippet uses --coverage (GCC/Clang)
+# which links against libgcov and emits .gcno/.gcda files for gcovr to
+# roll up. MSVC has no direct equivalent; instead we recommend using
+# OpenCppCoverage (https://github.com/OpenCppCoverage/OpenCppCoverage)
+# on Windows. The helper script lives at scripts/run-coverage.sh.
+if(VMOSUE_COVERAGE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    message(WARNING
+      "VMOSUE_COVERAGE=ON with MSVC: --coverage has no MSVC equivalent. "
+      "Use OpenCppCoverage to collect coverage data on Windows; the "
+      "--coverage flags will be silently ignored for the MSVC toolchain.")
+  endif()
+endif()
 
 # Threads
 find_package(Threads REQUIRED)
