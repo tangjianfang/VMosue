@@ -13,10 +13,7 @@ target_link_libraries(vmosue PRIVATE
   vmosue_input
   vmosue_ui
   vmosue_platform
+  vmosue_config
   Threads::Threads
   Boost::boost
 )
-
-# NOTE: This list intentionally omits vmosue_config. It is a forward
-# reference to Task 23 which has not landed yet. Add it to the link
-# list when that task lands.

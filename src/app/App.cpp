@@ -91,13 +91,30 @@ int App::Run() {
       if (s == GlobalState::Paused) sm_.Resume(); else sm_.Pause();
       VMOSUE_LOG_INFO("Tray: toggle pause -> {}", (int)sm_.State());
     };
-    cb.onOpenSettings = []()  { VMOSUE_LOG_INFO("Tray: Settings (not implemented yet)"); };
+    cb.onOpenSettings = [this]() {
+      if (settings_) settings_->Show();
+      else           VMOSUE_LOG_WARN("Tray: Settings unavailable");
+    };
     cb.onOpenDebug    = []()  { VMOSUE_LOG_INFO("Tray: Debug (not implemented yet)"); };
     cb.onOpenTutorial = []()  { VMOSUE_LOG_INFO("Tray: Tutorial (not implemented yet)"); };
     cb.onExit         = [this]() { VMOSUE_LOG_INFO("Tray: Exit requested"); Shutdown(); };
     if (!tray_.Init(trayMsgWnd_, cb)) {
       VMOSUE_LOG_WARN("Tray icon init failed");
     }
+  }
+
+  // Task 27: build the settings window modelessly. It is parented
+  // to the tray message window (which is hidden anyway) so the
+  // settings dialog also has no visible parent. The window is
+  // created in the hidden state; the tray's onOpenSettings callback
+  // (installed above) flips it visible. We construct it AFTER the
+  // trayMsgWnd_ exists because the SettingsWindow needs an HWND
+  // parent at Create() time. Failure to create is non-fatal: the
+  // tray's callback checks for a null unique_ptr and logs.
+  settings_ = std::make_unique<SettingsWindow>();
+  if (!settings_->Create(trayMsgWnd_)) {
+    VMOSUE_LOG_WARN("SettingsWindow init failed");
+    settings_.reset();
   }
 
   // Task 21: register the two emergency-stop triggers. Both call into
@@ -173,6 +190,14 @@ void App::Shutdown() {
   cam_.Stop();
 
   overlay_.Shutdown();
+
+  // Task 27: hide the settings window before tearing down the tray
+  // message window (which is its parent). Destroying the parent
+  // would otherwise destroy the settings child for us, which is
+  // fine for a hidden window but tidier to do explicitly via
+  // Hide(). The unique_ptr's destructor will DestroyWindow the
+  // hidden window when it goes out of scope.
+  if (settings_) settings_->Hide();
 
   // Task 26: tear the tray icon down BEFORE the message-only window.
   // Shell_NotifyIcon(NIM_DELETE) needs the HWND to be valid; if we

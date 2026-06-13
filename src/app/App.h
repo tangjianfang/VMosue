@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <vector>
 #include <boost/lockfree/spsc_queue.hpp>
@@ -9,6 +10,7 @@
 #include "inference/LandmarkSmoother.h"
 #include "gesture/GestureStateMachine.h"
 #include "ui/OverlayWindow.h"
+#include "ui/SettingsWindow.h"
 #include "ui/TrayIcon.h"
 
 namespace vmosue {
@@ -57,6 +59,10 @@ class App {
   GestureStateMachine sm_;
   OverlayWindow overlay_;
   TrayIcon tray_;
+  // Task 27: modeless Settings dialog. Created in Run(), shown via
+  // the tray icon's "Settings" menu item, hidden (not destroyed) in
+  // Shutdown so reopening is instant. unique_ptr owns the lifetime.
+  std::unique_ptr<SettingsWindow> settings_;
 
   // Task 26: a hidden message-only window that owns the tray icon
   // callbacks. TrayIcon::Shutdown() does NOT destroy this window;
