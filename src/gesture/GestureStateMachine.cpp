@@ -1,4 +1,5 @@
 #include "gesture/GestureStateMachine.h"
+#include "gesture/HandOpen.h"
 #include "input/InputInjector.h"
 #include "util/Logger.h"
 
@@ -72,6 +73,53 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
         break;
       }
     }
+  }
+
+  // Task 21: detect "primary" (right-by-default) hand for two-hand-open
+  // emergency stop. The pointer is local to this call so it cannot dangle
+  // across frames. We only need it for the open-hand heuristic; the
+  // cursor / click / scroll detectors below use the same lookup pattern.
+  const HandLandmarks* primary = nullptr;
+  {
+    int want = cfg_.handednessRight ? 1 : 0;
+    for (const auto& h : hands) {
+      if (h.handedness == want) {
+        primary = &h;
+        break;
+      }
+    }
+  }
+
+  // Task 21: two-hand-open emergency stop. Both hands visibly open for
+  // >= cfg.twoHandOpenHoldMs triggers EmergencyStop(). We do this BEFORE
+  // the Paused / Active short-circuit so a two-hand-open gesture still
+  // works while the system is Paused (it's a separate physical signal).
+  // We do NOT fire while already EmergencyStopped (latched terminal
+  // state, hotkey / restart only clears it).
+  if (primary && other && state_.load() != GlobalState::EmergencyStopped) {
+    bool bothOpen = IsHandOpen(*primary) && IsHandOpen(*other);
+    if (bothOpen) {
+      if (twoHandOpenStartMs_ == 0) {
+        twoHandOpenStartMs_ = ts;
+      } else if ((ts - twoHandOpenStartMs_) >= cfg_.twoHandOpenHoldMs) {
+        VMOSUE_LOG_WARN("Two-hand-open gesture triggered EmergencyStop");
+        // Drain any in-flight actions first so a consumer that polls
+        // after the safeRelease sees a clean slate (the pause-toggle
+        // branch above does the same). EmergencyStop() itself also
+        // releases OS-held buttons and latches state_.
+        std::lock_guard<std::mutex> lk(actionsMu_);
+        pending_ = {};
+        EmergencyStop();
+      }
+    } else {
+      // Either hand closed (or we lost a hand) -- reset the timer so the
+      // next open gesture has to wait the full hold again. This matches
+      // the PauseDetector semantics.
+      twoHandOpenStartMs_ = 0;
+    }
+  } else {
+    // One or both hands missing -- treat as broken gesture.
+    twoHandOpenStartMs_ = 0;
   }
 
   // Task 20: PauseDetector runs even when Paused, so the user can toggle

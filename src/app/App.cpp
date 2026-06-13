@@ -1,6 +1,7 @@
 #include "app/App.h"
 
 #include "input/InputInjector.h"
+#include "platform/Hotkey.h"
 #include "util/Logger.h"
 
 #include <chrono>
@@ -36,6 +37,15 @@ int App::Run() {
   sm_.Init({});
 
   if (!overlay_.Init(nullptr)) VMOSUE_LOG_WARN("Overlay init failed");
+
+  // Task 21: register the two emergency-stop triggers. Both call into
+  // the state machine which sets state_=EmergencyStopped, drains
+  // pending actions, and runs SafeReleaseAll on the InputInjector.
+  // The Ctrl+Alt+G chord fires immediately on press; the Esc hotkey
+  // fires after a 1000 ms hold to avoid accidental triggers (Esc is
+  // also used by many apps to dismiss dialogs).
+  Hotkey::RegisterCtrlAltG([this]() { sm_.EmergencyStop(); });
+  Hotkey::RegisterEsc([this]() { sm_.EmergencyStop(); }, 1000);
 
   cam_.Start();
   captureT_ = std::thread(&App::captureLoop, this);

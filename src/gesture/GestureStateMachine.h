@@ -32,7 +32,13 @@ class GestureStateMachine {
     AirClickDetector::Config airClick;
     ScrollDetector::Config scroll;
     PauseDetector::Config pause;
-    bool handednessRight = true;  // user-configurable
+    bool handednessRight = true;        // user-configurable
+    // Task 21: when both the primary and "other" hand are visibly open
+    // for at least this many ms (using the same 4-fingertip-above-MCP
+    // heuristic as PauseDetector), the state machine trips an
+    // EmergencyStop. Mirrors the hotkey path so the user has a
+    // camera-only fallback if their keyboard is unreachable.
+    int twoHandOpenHoldMs = 500;
   };
 
   Result<void> Init(const Config&);
@@ -54,6 +60,11 @@ class GestureStateMachine {
   std::atomic<GlobalState> state_{GlobalState::Active};
   std::mutex actionsMu_;
   ActionSet pending_;
+  // Task 21: timestamp (ms, same clock as `ts`) at which both hands
+  // became visibly open. Zero means "not currently open". When the
+  // gesture breaks (either hand closes) we reset this back to zero so
+  // a subsequent open-hand gesture has to wait the full holdMs again.
+  int64_t twoHandOpenStartMs_ = 0;
 };
 
 }  // namespace vmosue
