@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 #include <boost/lockfree/spsc_queue.hpp>
@@ -14,6 +15,18 @@
 #include "ui/TrayIcon.h"
 
 namespace vmosue {
+
+// Task 28: performance mode descriptor. The App's capture and
+// inference loops read CurrentPerfMode() on every iteration so a
+// user changing the dropdown at runtime takes effect on the next
+// frame; no thread signaling required. Values map to the strings
+// stored in AppConfig::performanceMode ("battery", "balanced",
+// "performance"); unknown strings fall back to balanced.
+struct PerfMode {
+  int  inferenceFps;  // Hz — cap on HandDetector::Detect() rate
+  int  captureFps;    // Hz — cap on CameraCapture::TryGetLatestFrame poll rate
+  bool useGpu;        // forwarded to HandDetector::SetUseGpu()
+};
 
 // App wires together the three worker threads that turn camera frames
 // into OS-level input events:
@@ -47,6 +60,13 @@ class App {
   void captureLoop();
   void inferenceLoop();
   void stateMachineLoop();
+
+  // Task 28: returns the PerfMode corresponding to
+  // Config::Get().Data().performanceMode. Unknown / unset values
+  // fall back to "balanced". Pure function; safe to call from
+  // worker threads (reads Config under the Config singleton's
+  // internal mutex via Data()).
+  static PerfMode CurrentPerfMode();
 
   std::atomic<bool> running_{false};
   std::thread captureT_;

@@ -2,7 +2,9 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 #include <atlbase.h>
 #include <mfreadwrite.h>
 #include "capture/Frame.h"
@@ -29,6 +31,15 @@ class CameraCapture {
 
   // Always returns the most recent frame; false if no frame yet.
   bool TryGetLatestFrame(Frame& out);
+
+  // Task 28: enumerate friendly names of all video capture devices
+  // currently visible to Media Foundation. Static so the Settings
+  // window can populate its camera dropdown without owning a
+  // CameraCapture instance. Returns an empty vector on failure
+  // (e.g. when the Media Foundation runtime is not initialized —
+  // the SettingsWindow handles that gracefully by offering only a
+  // "Default Camera" fallback).
+  static std::vector<std::wstring> EnumerateDevices();
 
  private:
   void captureLoop();

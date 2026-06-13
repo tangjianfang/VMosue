@@ -1,5 +1,6 @@
 #include "ui/SettingsWindow.h"
 
+#include "capture/CameraCapture.h"
 #include "config/Calibration.h"
 #include "config/Config.h"
 #include "util/Logger.h"
@@ -279,22 +280,35 @@ void SettingsWindow::PopulateCameras() {
   // Clear any previous entries (Show() may be called multiple times).
   SendMessageW(hwndCameraCombo_, CB_RESETCONTENT, 0, 0);
 
-  // v0.2: CameraCapture::EnumerateDevices() does not exist yet
-  // (Task 28). Insert a single placeholder so the dropdown is not
-  // empty. The placeholder is the human-readable label for
-  // cameraIndex=0.
-  SendMessageW(hwndCameraCombo_, CB_ADDSTRING, 0,
-               reinterpret_cast<LPARAM>(L"Default Camera (index 0)"));
+  // Task 28: query Media Foundation for the actual list of video
+  // capture devices. EnumerateDevices() is static and may safely be
+  // called from the UI thread before the App has spun up its
+  // capture worker. If it returns an empty list (e.g. running in a
+  // session with no camera permissions, or the stub fallback path
+  // on a CI runner), we add a single "No cameras detected" entry
+  // so the user can see the dropdown failed rather than a blank
+  // one. The save path below clamps to index 0 in that case.
+  std::vector<std::wstring> names = CameraCapture::EnumerateDevices();
+  if (names.empty()) {
+    SendMessageW(hwndCameraCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"No cameras detected"));
+  } else {
+    for (const auto& n : names) {
+      SendMessageW(hwndCameraCombo_, CB_ADDSTRING, 0,
+                   reinterpret_cast<LPARAM>(n.c_str()));
+    }
+  }
 
   // Select the current cameraIndex if it falls inside the
-  // placeholder range. Clamp into [0, 0] for v0.2.
+  // list range; otherwise fall back to 0. We allow empty
+  // enumeration to still pick index 0 (the placeholder) so
+  // the user sees something selected rather than no selection.
   const auto& cfg = Config::Get().Data();
   int sel = cfg.cameraIndex;
   if (sel < 0) sel = 0;
-  if (sel >= static_cast<int>(SendMessageW(hwndCameraCombo_,
-                                            CB_GETCOUNT, 0, 0))) {
-    sel = 0;
-  }
+  const int count = static_cast<int>(SendMessageW(hwndCameraCombo_,
+                                                   CB_GETCOUNT, 0, 0));
+  if (sel >= count) sel = 0;
   SendMessageW(hwndCameraCombo_, CB_SETCURSEL, sel, 0);
 }
 

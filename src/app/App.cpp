@@ -1,13 +1,18 @@
 #include "app/App.h"
 
 #include "app/Watchdog.h"
+#include "config/Config.h"
 #include "input/InputInjector.h"
 #include "platform/Hotkey.h"
 #include "util/Logger.h"
 #include "ui/TrayIcon.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
+#include <string>
+#include <thread>
+#include <unordered_map>
 
 namespace vmosue {
 
@@ -19,7 +24,68 @@ namespace {
 // practice.
 const wchar_t* const kTrayMsgClass = L"VMosueTrayMessageWindow";
 bool g_trayClassRegistered = false;
+
+// Task 28: PerfMode lookup keyed on AppConfig::performanceMode.
+// Strings match the spec table:
+//   battery    -> 15/15 fps, GPU off (laptop on battery)
+//   balanced   -> 30/30 fps, GPU on  (default)
+//   performance-> 30/60 fps, GPU on  (capture at 60, infer at 30)
+//
+// The map is a static local so it pays the construction cost
+// exactly once on first use. Strings are ASCII so we can
+// case-insensitive compare without locale lookups.
+const std::unordered_map<std::string, PerfMode>& PerfModeTable() {
+  static const std::unordered_map<std::string, PerfMode> kTable = {
+      {"battery",     {15, 15, false}},
+      {"balanced",    {30, 30, true}},
+      {"performance", {30, 60, true}},
+  };
+  return kTable;
+}
+
+// ASCII-lowercase helper for the case-insensitive match below.
+std::string AsciiLower(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(),
+                 [](unsigned char c) {
+                   return (c >= 'A' && c <= 'Z')
+                              ? static_cast<char>(c - 'A' + 'a')
+                              : static_cast<char>(c);
+                 });
+  return s;
+}
+
+// Sleep the calling thread for the remainder of the period that a
+// fixed-rate loop with the given `fps` should occupy, given that
+// `elapsed` time has already passed since the last tick.
+//
+// For example, with `fps=30` and `elapsed=10ms` the function sleeps
+// ~23ms so the next tick lands at 33ms after the last. We clamp
+// `period_us` to >= 1ms to avoid a division-by-zero / busy spin if
+// `fps` is ever set to zero.
+//
+// `elapsed_us` is taken as an int64 microsecond count so callers can
+// pass std::chrono::microseconds values without losing precision.
+void SleepForFps(int fps, int64_t elapsed_us) {
+  if (fps <= 0) return;
+  const int64_t period_us = 1000000 / fps;
+  const int64_t remaining = period_us - elapsed_us;
+  if (remaining > 0) {
+    std::this_thread::sleep_for(std::chrono::microseconds(remaining));
+  }
+}
 }  // namespace
+
+PerfMode App::CurrentPerfMode() {
+  const auto& cfg = Config::Get().Data();
+  const auto& table = PerfModeTable();
+  const std::string key = AsciiLower(cfg.performanceMode);
+  auto it = table.find(key);
+  if (it != table.end()) return it->second;
+  // Unknown / empty / mis-spelled -> default to balanced (the
+  // AppConfig in-class default is also "balanced"). This matches
+  // the SettingsWindow's fallback behavior on a corrupt config.
+  return PerfMode{30, 30, true};
+}
 
 LRESULT CALLBACK App::TrayMsgWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   // Forward to TrayIcon's WndProc, which knows how to translate the
@@ -37,20 +103,38 @@ int App::Run() {
   // tears us down.
   running_.store(true);
 
+  // Task 28: read the user's camera + perf-mode preferences from
+  // Config before initializing the camera and detector. The
+  // performance mode's useGpu flag is forwarded to the HandDetector
+  // (currently a stored-only flag; the GPU delegate is not wired up
+  // in v0.2). The captureFps is passed to CameraCapture as the
+  // requested media-type frame rate; the camera driver may grant
+  // less if it can't sustain it. Camera selection is by
+  // deviceIndex — no live switching in v0.2, so the choice takes
+  // effect on next startup.
+  const PerfMode initialPerf = CurrentPerfMode();
+  const auto& initialCfg = Config::Get().Data();
+
   CameraCapture::Config ccfg;
+  ccfg.deviceIndex = static_cast<uint32_t>(
+      std::max(0, initialCfg.cameraIndex));
   ccfg.width = 1280;
   ccfg.height = 720;
-  ccfg.fps = 30;
+  ccfg.fps = static_cast<uint32_t>(std::max(1, initialPerf.captureFps));
   if (!cam_.Init(ccfg).isOk()) {
     VMOSUE_LOG_ERROR("Camera init failed");
     return 1;
   }
 
   HandDetector::Config hcfg;
+  hcfg.useGpu = initialPerf.useGpu;
   if (!detector_.Init(hcfg).isOk()) {
     VMOSUE_LOG_ERROR("HandDetector init failed");
     return 1;
   }
+  VMOSUE_LOG_INFO("PerfMode initial: infer={}fps capture={}fps gpu={}",
+                  initialPerf.inferenceFps, initialPerf.captureFps,
+                  initialPerf.useGpu ? "on" : "off");
 
   sm_.Init({});
 
@@ -216,23 +300,48 @@ void App::Shutdown() {
 
 void App::captureLoop() {
   try {
+    // Task 28: throttle the capture poll to PerfMode::captureFps.
+    // The CameraCapture SourceReader produces frames at the
+    // camera's native rate (whatever the driver granted), so the
+    // frame we'll get on each tick is the freshest one. A long
+    // sleep on a slow mode just means the inference thread sees
+    // older frames — acceptable. We also use `last_tick` to track
+    // wall-clock so the throttle is rate-based, not loop-based
+    // (otherwise a CPU-starved system would run slower than
+    // requested without us ever catching up).
+    using clock = std::chrono::steady_clock;
+    auto last_tick = clock::now();
     while (running_.load()) {
       // Task 24: heartbeating at the top of the loop means a
       // thread that is alive and scheduling gets a tick at least
       // once per iteration. Heartbeat is internally throttled to
-      // 1Hz so the lock cost is negligible even though we run
-      // ~1000Hz here.
+      // 1Hz so the lock cost is negligible.
       Watchdog::Get().Heartbeat(std::this_thread::get_id());
+
+      // Read the perf mode on every tick so a user-driven
+      // dropdown change in the Settings window takes effect
+      // immediately on the next frame.
+      const PerfMode mode = CurrentPerfMode();
+      const int targetFps = std::max(1, mode.captureFps);
+
       Frame f;
       if (cam_.TryGetLatestFrame(f)) {
         // SPSC: push() only fails if the queue is full, in which case
-        // we drop the new frame. The capture thread runs slower than
-        // the camera's effective frame rate so this is acceptable
-        // here; the inference thread will simply see fresh data next
-        // iteration.
+        // we drop the new frame. The capture thread runs at the
+        // configured captureFps, the inference thread pulls at
+        // inferenceFps, so the queue depth stays bounded.
         frameQ_.push(f);
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+      // Sleep for the remainder of the period. If the loop body
+      // took longer than the period (CPU-starved host), we don't
+      // sleep at all — just run as fast as we can.
+      auto now = clock::now();
+      int64_t elapsed_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              now - last_tick).count();
+      last_tick = now;
+      SleepForFps(targetFps, elapsed_us);
     }
   } catch (const std::exception& e) {
     VMOSUE_LOG_ERROR("captureLoop exception: {}", e.what());
@@ -243,21 +352,55 @@ void App::captureLoop() {
 
 void App::inferenceLoop() {
   try {
+    using clock = std::chrono::steady_clock;
+    auto last_tick = clock::now();
+    // Track the last useGpu we applied to the detector so we
+    // only call SetUseGpu when the value actually changes (the
+    // setter is cheap, but the log line on every iteration would
+    // be noisy).
+    bool lastGpu = detector_.UseGpu();
     while (running_.load()) {
       // Task 24: see captureLoop().
       Watchdog::Get().Heartbeat(std::this_thread::get_id());
+
+      const PerfMode mode = CurrentPerfMode();
+      // Apply a useGpu change pushed via the Settings window.
+      // In v0.2 the flag is stored-only (no MediaPipe GPU
+      // delegate), but the wiring is in place for when the
+      // delegate lands.
+      if (mode.useGpu != lastGpu) {
+        detector_.SetUseGpu(mode.useGpu);
+        lastGpu = mode.useGpu;
+        VMOSUE_LOG_INFO("PerfMode: HandDetector::useGpu -> {}",
+                        mode.useGpu ? "on" : "off");
+      }
+
       Frame f;
       if (frameQ_.pop(f)) {
         auto hands = detector_.Detect(f);
+        // Use the perf-mode inference rate for the smoother's
+        // time step (dt = 1/fps). This keeps the One-Euro
+        // filter tuned to the actual cadence of incoming
+        // landmarks.
+        const double dt = 1.0 / std::max(1, mode.inferenceFps);
         for (auto& h : hands) {
-          smoother_.Smooth(h, 1.0 / 30.0);
+          smoother_.Smooth(h, dt);
         }
         // SPSC: same drop-on-full semantics as the capture queue. We
         // move() to avoid a deep copy of the HandLandmarks arrays.
         landmarkQ_.push(std::move(hands));
-      } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
+
+      // Throttle the loop to the configured inference rate. The
+      // sleep runs regardless of whether we processed a frame
+      // so a queue with no data doesn't trigger a tight
+      // busy-spin.
+      auto now = clock::now();
+      int64_t elapsed_us =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              now - last_tick).count();
+      last_tick = now;
+      SleepForFps(std::max(1, mode.inferenceFps), elapsed_us);
     }
   } catch (const std::exception& e) {
     VMOSUE_LOG_ERROR("inferenceLoop exception: {}", e.what());

@@ -57,6 +57,39 @@ std::vector<DeviceInfo> enumerateCameras() {
 }
 }  // namespace
 
+std::vector<std::wstring> CameraCapture::EnumerateDevices() {
+  // The Settings window calls this from the UI thread before
+  // CameraCapture::Init() has had a chance to MFStartup() the MF
+  // runtime. Media Foundation's MFEnumDeviceSources is documented
+  // to work without an explicit MFStartup() on Windows 7+ because
+  // the OS auto-starts the MF platform when a media API is called.
+  // Nonetheless we MFStartup() defensively so we get a valid device
+  // list even on platforms where the auto-start is suppressed, and
+  // we MFShutdown() on the way out if we were the one who started
+  // it. (MFStartup uses reference counting internally — calling it
+  // here is safe regardless of the calling thread's MF state.)
+  HRESULT hr = MFStartup(MF_VERSION);
+  const bool weStartedMF = SUCCEEDED(hr);
+
+  std::vector<std::wstring> names;
+  auto devices = enumerateCameras();
+  names.reserve(devices.size());
+  for (const auto& d : devices) {
+    // Append the index so a user with two identical webcams can
+    // still tell them apart in the dropdown. The index is in
+    // brackets to keep it visually distinct from the friendly
+    // name. Init() will need to enumerate again and pick the
+    // matching index, so the index-in-brackets is just a
+    // human-friendly hint.
+    names.push_back(d.name);
+  }
+
+  if (weStartedMF) {
+    MFShutdown();
+  }
+  return names;
+}
+
 CameraCapture::CameraCapture() = default;
 CameraCapture::~CameraCapture() { Stop(); }
 

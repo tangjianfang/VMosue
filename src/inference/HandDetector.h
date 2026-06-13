@@ -29,6 +29,16 @@ class HandDetector {
   Result<void> Init(const Config&);
   std::vector<HandLandmarks> Detect(const Frame&);
 
+  // Task 28: live-update the useGpu flag driven by App's PerfMode.
+  // In v0.2 the GPU delegate is a stored-only flag (see
+  // HandDetector.cpp); the MediaPipe GPU delegate is not wired up
+  // yet. Re-init is not required: the change takes effect on the
+  // next Detect() call.
+  void SetUseGpu(bool v) { cfg_.useGpu = v; }
+
+  // Read accessor (used by App when refreshing useGpu from Config).
+  bool UseGpu() const { return cfg_.useGpu; }
+
  private:
   Config cfg_;
   bool initialized_ = false;
