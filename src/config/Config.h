@@ -1,0 +1,73 @@
+#pragma once
+#include <filesystem>
+#include <mutex>
+#include <string>
+
+#include "util/Result.h"
+
+namespace vmosue {
+
+// Application-wide user preferences. Loaded from and persisted to a
+// JSON file under %LOCALAPPDATA%\VMosue\config.json by default. Every
+// field has an in-class default so a fresh install (or a corrupted
+// config file) still produces a usable configuration.
+struct AppConfig {
+  std::string activeProfile = "default";
+  int cameraIndex = 0;
+  std::string performanceMode = "balanced";
+  bool autoStart = false;
+  bool showTutorialOnLaunch = true;
+  float sensitivity = 1.0f;
+  std::string logLevel = "info";
+};
+
+// Process-wide singleton holding the active AppConfig.
+//
+// Default path: %LOCALAPPDATA%\VMosue\config.json (matches the
+// convention in Calibration.cpp and app/main.cpp). Tests call
+// SetConfigPath() with a temp file before Load/Save so the production
+// path is never touched during a test run; per-test isolation also
+// keeps a corrupt file from one test poisoning the next.
+//
+// Load() and Save() are thread-safe: a std::mutex guards `data_`. On
+// corruption Load() returns Err, leaving `data_` set to defaults so
+// the app can show a "config was corrupt, restored to defaults"
+// message and continue running with safe defaults.
+class Config {
+ public:
+  // Meyers singleton: thread-safe initialization in C++11+.
+  static Config& Get();
+
+  // Override the path used by Load/Save. Empty path resets to the
+  // default (%LOCALAPPDATA%\VMosue\config.json).
+  void SetConfigPath(const std::filesystem::path& path);
+
+  // Resolved config file path.
+  std::filesystem::path ConfigPath() const;
+
+  // Load AppConfig from disk. Returns Err if the file is missing or
+  // malformed; in either case `data_` is left at its current value
+  // (caller should reset via a fresh instance or accept defaults).
+  Result<void> Load();
+
+  // Atomically write AppConfig to disk: writes to <path>.tmp, then
+  // renames over <path>. Returns Err if the directory cannot be
+  // created or the file cannot be written.
+  Result<void> Save() const;
+
+  // Mutable access to the in-memory config. Not thread-safe with
+  // Load/Save; callers should serialize externally if needed.
+  AppConfig& Mutable() { return data_; }
+  // Read-only access. Named Data() rather than Get() to avoid a
+  // name clash with the static singleton accessor Config::Get().
+  const AppConfig& Data() const { return data_; }
+
+ private:
+  Config() = default;
+
+  mutable std::mutex mu_;
+  std::filesystem::path configPath_;
+  AppConfig data_;
+};
+
+}  // namespace vmosue
