@@ -328,11 +328,6 @@ void TutorialWindow::CreateControls() {
 
 void TutorialWindow::RenderStep() {
   if (!hwnd_) return;
-  // RenderStepStatic is the no-instance-pointer variant used by
-  // the static WndProc when called from outside (we never do that
-  // in v0.2, but the helper is there for symmetry with future
-  // refactors).
-  if (hwnd_ == nullptr) return;
   // Clamp step in case of programmatic misuse.
   if (currentStep_ < 0) currentStep_ = 0;
   if (currentStep_ >= kStepCount) currentStep_ = kStepCount - 1;
