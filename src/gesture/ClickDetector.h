@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include "inference/HandDetector.h"
 
 namespace vmosue {
@@ -23,7 +24,9 @@ class ClickDetector {
   Config cfg_;
   Phase phase_ = Phase::Idle;
   int64_t pinchStartMs_ = 0;
-  int64_t lastClickMs_ = 0;
+  // std::nullopt means "never clicked"; using 0 as a sentinel would falsely
+  // pair a very first click (timestamp near 0) with a double-click.
+  std::optional<int64_t> lastClickMs_;
 };
 
 }  // namespace vmosue

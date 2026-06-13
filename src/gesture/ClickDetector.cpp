@@ -4,7 +4,11 @@
 namespace vmosue {
 
 void ClickDetector::SetConfig(const Config& c) { cfg_ = c; }
-void ClickDetector::Reset() { phase_ = Phase::Idle; pinchStartMs_ = 0; }
+void ClickDetector::Reset() {
+  phase_ = Phase::Idle;
+  pinchStartMs_ = 0;
+  lastClickMs_.reset();
+}
 
 static float dist2D(const Point2F& a, const Point2F& b) {
   float dx = a.x - b.x, dy = a.y - b.y;
@@ -26,7 +30,8 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
     case Phase::Pinching:
       if (d > cfg_.releaseThresholdNorm) {
         // Released; emit click or down+up
-        bool isDouble = (ts - lastClickMs_) < cfg_.doubleClickWindowMs;
+        bool isDouble = lastClickMs_.has_value()
+                     && (ts - *lastClickMs_) < cfg_.doubleClickWindowMs;
         ev = isDouble ? ClickEvent::LeftDoubleClick : ClickEvent::LeftClick;
         lastClickMs_ = ts;
         phase_ = Phase::Idle;
