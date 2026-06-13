@@ -8,6 +8,7 @@
 #include "gesture/ClickDetector.h"
 #include "gesture/AirClickDetector.h"
 #include "gesture/ScrollDetector.h"
+#include "gesture/PauseDetector.h"
 #include "util/Result.h"
 
 namespace vmosue {
@@ -30,6 +31,7 @@ class GestureStateMachine {
     ClickDetector::Config click;
     AirClickDetector::Config airClick;
     ScrollDetector::Config scroll;
+    PauseDetector::Config pause;
     bool handednessRight = true;  // user-configurable
   };
 
@@ -48,6 +50,7 @@ class GestureStateMachine {
   ClickDetector click_;
   AirClickDetector airClick_;
   ScrollDetector scroll_;
+  PauseDetector pause_;
   std::atomic<GlobalState> state_{GlobalState::Active};
   std::mutex actionsMu_;
   ActionSet pending_;

@@ -10,6 +10,7 @@ Result<void> GestureStateMachine::Init(const Config& c) {
   click_.SetConfig(c.click);
   airClick_.SetConfig(c.airClick);
   scroll_.SetConfig(c.scroll);
+  pause_.SetConfig(c.pause);
   return Result<void>::Ok({});
 }
 
@@ -44,6 +45,7 @@ void GestureStateMachine::Reset() {
   click_.Reset();
   airClick_.Reset();
   scroll_.Reset();
+  pause_.Reset();
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
 }
@@ -53,6 +55,55 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // (e.g. rate-limited cursor smoothing in the state machine itself). The
   // click and air-click detectors are time-window based and use the
   // millisecond timestamp `ts` directly.
+
+  // Find the "other" hand (opposite of configured handedness) up front.
+  // Task 16 lays the groundwork; Task 19 wires the ScrollDetector that
+  // consumes `other`, and Task 20 wires the PauseDetector. The pointers
+  // are computed per-call rather than stored, so they cannot dangle
+  // across frames.
+  const HandLandmarks* other = nullptr;
+  {
+    int otherHandedness = cfg_.handednessRight ? 0 : 1;
+    for (const auto& h : hands) {
+      if (h.handedness == otherHandedness) {
+        other = &h;
+        break;
+      }
+    }
+  }
+
+  // Task 20: PauseDetector runs even when Paused, so the user can toggle
+  // back to Active. While Paused, all other detectors are short-circuited
+  // below. EmergencyStop cannot be exited via gestures — only the hotkey
+  // or restart of the app should clear it (see EmergencyStop()).
+  if (other && state_.load() != GlobalState::EmergencyStopped) {
+    auto pauseEv = pause_.OnLandmarks(*other, ts);
+    if (pauseEv == PauseDetector::Event::PauseToggle) {
+      GlobalState cur = state_.load();
+      GlobalState next = (cur == GlobalState::Paused)
+                             ? GlobalState::Active
+                             : GlobalState::Paused;
+      state_.store(next);
+      // Drain pending actions so anything in flight on the consumer side
+      // does not replay after resume, and reset every detector so an
+      // in-progress gesture (mid-click hold, mid-scroll phase) does not
+      // resume mid-action. Pause is a soft state, not EmergencyStop, so
+      // we deliberately do NOT call SafeReleaseAll: the user just wants
+      // to stop emitting events, not cancel a current OS-level button
+      // hold. We also do NOT set pending_.safeRelease (that flag is for
+      // EmergencyStop; see EmergencyStop() below).
+      std::lock_guard<std::mutex> lk(actionsMu_);
+      pending_ = {};
+      cursor_.Reset();
+      click_.Reset();
+      airClick_.Reset();
+      scroll_.Reset();
+    }
+  }
+
+  // After pause processing, short-circuit if not Active. Note: the pause
+  // detector ran above so a Paused state can be flipped back to Active
+  // within this same frame.
   if (state_.load() != GlobalState::Active) return;
 
   // Find right hand (or left, when the user is left-handed).
@@ -66,26 +117,9 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   }
   if (!right) return;
 
-  // Find the "other" hand (opposite of configured handedness) for future
-  // two-hand gestures. Task 16 lays the groundwork; Task 19 will wire a
-  // ScrollDetector that consumes `other` landmarks, and Task 20 will add
-  // a PauseDetector. Until those detectors exist, `other` is unused —
-  // computed per-call rather than stored, so the pointer cannot dangle
-  // across frames.
-  const HandLandmarks* other = nullptr;
-  {
-    int otherHandedness = cfg_.handednessRight ? 0 : 1;
-    for (const auto& h : hands) {
-      if (h.handedness == otherHandedness) {
-        other = &h;
-        break;
-      }
-    }
-  }
   // Task 19: ScrollDetector consumes the "other" hand's index/middle Y
   // motion. Returns a wheel delta (positive = scroll up).
   int scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : 0;
-  // TODO(Task 20): pass `other` landmarks to PauseDetector.
 
   ActionSet local;
 
