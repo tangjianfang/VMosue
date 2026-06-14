@@ -28,6 +28,13 @@ vcpkg_installed/
 *.ilk
 *.exp
 *.lib
+*.obj
+*.exe
+
+# Throwaway dev/test scripts at repo root
+/check_include.bat
+/run_all.bat
+/test_*.bat
 
 # OS
 .DS_Store

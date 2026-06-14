@@ -122,6 +122,6 @@ TEST_F(CalibrationTest, RejectsPathTraversalProfileName) {
   // baseDir_ must not have been used as a parent for the bad name.
   std::error_code ec;
   for (const auto& entry : std::filesystem::directory_iterator(baseDir_, ec)) {
-    EXPECT_NE(entry.path().filename().string(), "escape.json");
+    EXPECT_NE(entry.path().filename().string(), std::string("escape.json"));
   }
 }
