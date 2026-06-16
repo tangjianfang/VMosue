@@ -242,4 +242,65 @@ TEST(Adaptive, ZApproachThresholdClampsToRange) {
   EXPECT_GE(thr, 0.005f);
 }
 
+// ---- Click distance (pinch / release) ----
+
+TEST(Adaptive, PinchAndReleaseFromObservedRange) {
+  // Feed a clean bimodal distance: open = 0.15, pinch = 0.02.
+  // min = 0.02, max = 0.15, range = 0.13.
+  // pinch = 0.02 + 0.4 * 0.13 = 0.072
+  // release = 0.02 + 0.6 * 0.13 = 0.098
+  for (int i = 0; i < 100; ++i) {
+    GetSignalObserver().RecordClickDistance(0.15);
+    GetSignalObserver().RecordClickDistance(0.02);
+  }
+  float p = GetAdaptive().PinchThreshold();
+  float r = GetAdaptive().ReleaseThreshold();
+  EXPECT_GE(p, 0.05f);
+  EXPECT_LE(p, 0.09f);
+  EXPECT_GE(r, 0.08f);
+  EXPECT_LE(r, 0.12f);
+  EXPECT_GT(r, p);  // hysteresis preserved by construction
+}
+
+TEST(Adaptive, PinchThresholdSaneAfterWarming) {
+  // By the time this test runs, prior tests have populated the
+  // click-distance rolling window. We just check the value is
+  // within the [min, max] range of the observed distances
+  // (which is the geometric property the adaptive formula
+  // guarantees).
+  float p = GetAdaptive().PinchThreshold();
+  auto s = GetSignalObserver().GetClickDistance();
+  EXPECT_GE(p, static_cast<float>(s.min));
+  EXPECT_LE(p, static_cast<float>(s.max));
+}
+
+// ---- Scroll distance + scale ----
+
+TEST(Adaptive, ScrollEnterAndExitFromObservedRange) {
+  // Same scheme as pinch/release but on a different range. Open
+  // = 0.12, closed = 0.01 -> enter = 0.01 + 0.4*0.11 = 0.054,
+  // exit = 0.01 + 0.6*0.11 = 0.076. enter < exit -> proper
+  // hysteresis.
+  for (int i = 0; i < 100; ++i) {
+    GetSignalObserver().RecordScrollDistance(0.12);
+    GetSignalObserver().RecordScrollDistance(0.01);
+  }
+  float e = GetAdaptive().ScrollEnterThreshold();
+  float x = GetAdaptive().ScrollExitThreshold();
+  EXPECT_GE(e, 0.04f);
+  EXPECT_LE(e, 0.08f);
+  EXPECT_GT(x, e);
+}
+
+TEST(Adaptive, ScrollScaleFactorScalesWithHeight) {
+  GetSignalObserver().RecordVirtualDesktop(1920, 1080);
+  float s1080 = GetAdaptive().ScrollScaleFactor();
+  GetSignalObserver().RecordVirtualDesktop(3840, 2160);
+  float s4k = GetAdaptive().ScrollScaleFactor();
+  // 4K should get roughly half the scale of 1080p.
+  EXPECT_NEAR(s1080, 1500.0f, 5.0f);
+  EXPECT_NEAR(s4k,  750.0f, 5.0f);
+  EXPECT_NEAR(s1080, s4k * 2.0f, 5.0f);
+}
+
 }  // namespace

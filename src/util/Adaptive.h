@@ -131,6 +131,30 @@ class SignalObserver {
     zBuf_[zIdx_] = dz;
   }
 
+  // Record the index-thumb 2D distance (ClickDetector's pinch
+  // signal). We keep a rolling min/max so the controller can place
+  // pinch / release thresholds at min + k * (max - min) — the
+  // "distance-bimodal" scheme: any user's open/closed pinch sits
+  // at distinct min/max values, and the threshold band sits in
+  // the gap between them.
+  void RecordClickDistance(double d) {
+    std::lock_guard<std::mutex> lk(mu_);
+    ++framesObserved_;
+    clickDistIdx_ = (clickDistIdx_ + 1) % kRollingWindowSize;
+    clickDistBuf_[clickDistIdx_] = d;
+  }
+
+  // Record the index-middle vertical distance (ScrollDetector's
+  // "two fingers together" signal). Same min/max scheme as
+  // click distance but a separate buffer because the units and
+  // semantics differ.
+  void RecordScrollDistance(double d) {
+    std::lock_guard<std::mutex> lk(mu_);
+    ++framesObserved_;
+    scrollDistIdx_ = (scrollDistIdx_ + 1) % kRollingWindowSize;
+    scrollDistBuf_[scrollDistIdx_] = d;
+  }
+
   // ---- Accessors (called under lock by AdaptiveController) ----
 
   struct ScoreStats {
@@ -275,6 +299,39 @@ class SignalObserver {
     return s;
   }
 
+  struct DistanceStats {
+    bool hasData;
+    double min, max;  // observed range over the rolling window
+  };
+  DistanceStats GetClickDistance() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    DistanceStats s{};
+    s.hasData = clickDistIdx_ >= 0 && framesObserved_ >= kColdStartFrames;
+    if (!s.hasData) return s;
+    int n = std::min<int>(clickDistIdx_ + 1, kRollingWindowSize);
+    s.min = clickDistBuf_[0];
+    s.max = clickDistBuf_[0];
+    for (int i = 1; i < n; ++i) {
+      if (clickDistBuf_[i] < s.min) s.min = clickDistBuf_[i];
+      if (clickDistBuf_[i] > s.max) s.max = clickDistBuf_[i];
+    }
+    return s;
+  }
+  DistanceStats GetScrollDistance() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    DistanceStats s{};
+    s.hasData = scrollDistIdx_ >= 0 && framesObserved_ >= kColdStartFrames;
+    if (!s.hasData) return s;
+    int n = std::min<int>(scrollDistIdx_ + 1, kRollingWindowSize);
+    s.min = scrollDistBuf_[0];
+    s.max = scrollDistBuf_[0];
+    for (int i = 1; i < n; ++i) {
+      if (scrollDistBuf_[i] < s.min) s.min = scrollDistBuf_[i];
+      if (scrollDistBuf_[i] > s.max) s.max = scrollDistBuf_[i];
+    }
+    return s;
+  }
+
   int FramesObserved() const {
     std::lock_guard<std::mutex> lk(mu_);
     return framesObserved_;
@@ -315,6 +372,11 @@ class SignalObserver {
 
   std::array<double, kRollingWindowSize> zBuf_{};
   int zIdx_ = -1;
+
+  std::array<double, kRollingWindowSize> clickDistBuf_{};
+  int clickDistIdx_ = -1;
+  std::array<double, kRollingWindowSize> scrollDistBuf_{};
+  int scrollDistIdx_ = -1;
 
   int virtW_ = 1920;
   int virtH_ = 1080;
@@ -498,6 +560,99 @@ class AdaptiveController {
     if (adaptive < 0.005) adaptive = 0.005;
     if (adaptive > 0.1)   adaptive = 0.1;
     return BlendWithFallback(static_cast<float>(adaptive), 0.02f);
+  }
+
+  // Click pinch threshold (normalized [0, 1] frame units).
+  //
+  // Principle (distance-bimodal adaptive): track the rolling
+  // min/max of the index-thumb distance. The user's "open" hand
+  // and "closed" pinch sit at distinct values; the threshold sits
+  // 40% of the way from min to max — the point where the
+  // detector reliably crosses when the user pinches.
+  // pinch = min + 0.4 * (max - min).
+  //
+  // Cold-start: 0.04 (v0.4 default).
+  float PinchThreshold() const {
+    auto s = GetSignalObserver().GetClickDistance();
+    if (!s.hasData) return 0.04f;
+    constexpr double kPinch = 0.4;
+    double adaptive = s.min + kPinch * (s.max - s.min);
+    // Hard floor at 1% of frame so an extreme pinch (the fingers
+    // already overlap in the image) doesn't yield a negative or
+    // near-zero threshold.
+    if (adaptive < 0.01) adaptive = 0.01;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.04f);
+  }
+
+  // Click release threshold (normalized [0, 1] frame units).
+  //
+  // Same distance-bimodal scheme as pinch, but at the 60% point
+  // so release > pinch by construction. The 20% hysteresis band
+  // prevents flapping at the boundary.
+  //
+  // Cold-start: 0.07 (v0.4 default).
+  float ReleaseThreshold() const {
+    auto s = GetSignalObserver().GetClickDistance();
+    if (!s.hasData) return 0.07f;
+    constexpr double kRelease = 0.6;
+    double adaptive = s.min + kRelease * (s.max - s.min);
+    if (adaptive < 0.02) adaptive = 0.02;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.07f);
+  }
+
+  // Scroll enter threshold (normalized [0, 1] frame units).
+  //
+  // Same distance-bimodal scheme as pinch, but for the
+  // index-middle vertical distance (the "two fingers together"
+  // signal). The same 40%-of-range placement yields a threshold
+  // that adapts to the user's finger anatomy.
+  //
+  // Cold-start: 0.05 (v0.4 default).
+  float ScrollEnterThreshold() const {
+    auto s = GetSignalObserver().GetScrollDistance();
+    if (!s.hasData) return 0.05f;
+    constexpr double kEnter = 0.4;
+    double adaptive = s.min + kEnter * (s.max - s.min);
+    if (adaptive < 0.01) adaptive = 0.01;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.05f);
+  }
+
+  // Scroll exit threshold (normalized [0, 1] frame units).
+  //
+  // Same scheme as release, at the 60% point. With
+  // enter < exit the detector is in "active scroll" state when
+  // the fingers are close together and falls out of it when they
+  // spread — the natural reading of a two-finger-pinch-scroll.
+  //
+  // Cold-start: 0.03 (v0.4 default).
+  float ScrollExitThreshold() const {
+    auto s = GetSignalObserver().GetScrollDistance();
+    if (!s.hasData) return 0.03f;
+    constexpr double kExit = 0.6;
+    double adaptive = s.min + kExit * (s.max - s.min);
+    if (adaptive < 0.02) adaptive = 0.02;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.03f);
+  }
+
+  // Scroll scale factor (pixels-per-frame per unit normalized
+  // finger displacement).
+  //
+  // Principle (motion-range adaptive): scale = base * (1080 /
+  // virtH) so a 1080p screen gets the full 1500 (matching v0.4)
+  // and a 4K screen gets half (less scrolling per pixel of
+  // finger motion — preserves the same physical scroll
+  // distance-per-cm-of-finger). Clamped to a sensible range.
+  //
+  // Cold-start: 1500.
+  float ScrollScaleFactor() const {
+    auto [virtW, virtH] = GetSignalObserver().VirtualDesktop();
+    if (virtH <= 0) virtH = 1080;
+    constexpr double kBase = 1500.0;
+    constexpr double kRefH = 1080.0;
+    double adaptive = kBase * (kRefH / static_cast<double>(virtH));
+    if (adaptive < 500.0)  adaptive = 500.0;
+    if (adaptive > 4000.0) adaptive = 4000.0;
+    return BlendWithFallback(static_cast<float>(adaptive), 1500.0f);
   }
 
  private:

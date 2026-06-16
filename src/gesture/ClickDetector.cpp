@@ -1,4 +1,5 @@
 #include "gesture/ClickDetector.h"
+#include "util/Adaptive.h"
 #include <cmath>
 
 namespace vmosue {
@@ -21,6 +22,17 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
   if (right.points.size() < 9) return ClickEvent::None;
   // Thumb tip = 4, index tip = 8
   float d = dist2D(right.points[4], right.points[8]);
+
+  // v0.5: feed the distance into the adaptive observer (it
+  // tracks the rolling min/max). The thresholds below come from
+  // GetAdaptive() which interpolates between the observed
+  // min/max range and the v0.4 default. During cold start the
+  // default thresholds (0.04 / 0.07) apply, so behavior is
+  // identical to v0.4 for the first ~1 s.
+  GetSignalObserver().RecordClickDistance(d);
+  const float pinch = GetAdaptive().PinchThreshold();
+  const float release = GetAdaptive().ReleaseThreshold();
+
   ClickEvent ev = ClickEvent::None;
   // Check if a pending (held) single click has expired; if so, emit it now.
   // We do this at the start of each frame so the caller sees the click on
@@ -33,13 +45,13 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
   }
   switch (phase_) {
     case Phase::Idle:
-      if (d < cfg_.pinchThresholdNorm) {
+      if (d < pinch) {
         phase_ = Phase::Pinching;
         pinchStartMs_ = ts;
       }
       break;
     case Phase::Pinching:
-      if (d > cfg_.releaseThresholdNorm) {
+      if (d > release) {
         // Released; emit click or down+up
         bool isDouble = lastClickMs_.has_value()
                      && (ts - *lastClickMs_) < cfg_.doubleClickWindowMs;
@@ -67,7 +79,7 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
       }
       break;
     case Phase::Held:
-      if (d > cfg_.releaseThresholdNorm) {
+      if (d > release) {
         ev = ClickEvent::LeftDragEnd;
         phase_ = Phase::Idle;
       }
