@@ -89,9 +89,18 @@ Result<void> HandDetector::Init(const Config& cfg) {
     return Result<void>::Err("HandLandmarkerWrapper::Create failed for model: " +
                              cfg_.modelPath);
   }
+  // Be explicit that the model file was opened but no real detection
+  // is wired up: this build environment cannot reach github.com /
+  // storage.googleapis.com to fetch MediaPipe (see docs/build-notes.md),
+  // so Detect() returns an empty vector until the real C API is
+  // linked. Without this line the log "HandDetector initialized:"
+  // misled users into thinking hand tracking was live.
   initialized_ = true;
-  VMOSUE_LOG_INFO("HandDetector initialized: model={}, maxHands={}",
-                  cfg_.modelPath, cfg_.maxHands);
+  VMOSUE_LOG_WARN(
+      "HandDetector running in STUB mode (no MediaPipe linked). "
+      "Detect() will return no hands; gesture tracking is disabled. "
+      "model={}, maxHands={}",
+      cfg_.modelPath, cfg_.maxHands);
   return Result<void>::Ok({});
 }
 

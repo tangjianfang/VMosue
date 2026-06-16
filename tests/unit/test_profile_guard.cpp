@@ -92,4 +92,25 @@ TEST_F(ProfileGuardTest, CustomThresholdDoesNotCrash) {
   SUCCEED();
 }
 
+// Regression: the constructor must store the threshold it is given.
+// Before the fix, `threshold_` was missing from the member
+// initializer list, so its value was indeterminate and on common
+// stack layouts it ended up as 0.0. With threshold_ == 0.0, every
+// sample satisfies `ms >= threshold_` and the destructor logs a
+// WARN line — at the 30Hz capture cadence this floods the console
+// with WARN lines (and the file log too) until the user force-quits.
+TEST_F(ProfileGuardTest, ConstructorStoresThreshold) {
+  {
+    ProfileGuard g("pgu_stored", /*enabled=*/true, /*thresholdMs=*/42.5);
+    EXPECT_EQ(g.ThresholdForTest(), 42.5);
+  }
+  // Same check with the default threshold (no arg). The class
+  // header documents 60.0ms as the spec budget; if that ever
+  // changes this test should be updated deliberately.
+  {
+    ProfileGuard g("pgu_stored2");
+    EXPECT_EQ(g.ThresholdForTest(), 60.0);
+  }
+}
+
 }  // namespace

@@ -143,7 +143,13 @@ void TrayIcon::ShowContextMenu(HWND hwnd) {
   // Required so the menu dismisses correctly when the user clicks
   // outside it (otherwise the popup may not receive its WM_COMMAND).
   SetForegroundWindow(hwnd);
-  TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_RETURNCMD,
+  // NOTE: do NOT pass TPM_RETURNCMD here. With TPM_RETURNCMD the
+  // function returns the selected command id directly and does NOT
+  // post WM_COMMAND to the owner window, which means the switch in
+  // WndProc below would be dead code and every menu item silently
+  // does nothing. The non-returning form posts WM_COMMAND to hwnd
+  // and WndProc dispatches to the registered callbacks.
+  TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_NONOTIFY,
                  pt.x, pt.y, 0, hwnd, nullptr);
   DestroyMenu(m);
 }

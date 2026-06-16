@@ -33,6 +33,21 @@ class InputInjector {
   // are zero so we don't issue spurious SendInput calls.
   void MoveCursor(int dx, int dy);
 
+  // Maximum per-call pixel delta applied by MoveCursor. Exposed as a
+  // constant so tests can assert the bound without re-deriving it.
+  // Defense-in-depth: a noisy first frame or a future bug in the
+  // gesture pipeline that skips the dead-zone could otherwise yank
+  // the OS cursor by thousands of pixels and freeze the user's
+  // session. 500px is generous for a normal flick (~15k px/sec at
+  // 30Hz) but small enough that a runaway value of e.g. 5000 gets
+  // capped before reaching SendInput.
+  static constexpr int kMaxMovePerCall = 500;
+
+  // Pure helper: clamp (dx, dy) to the per-call bound. Exposed so
+  // unit tests can verify the clamping logic without depending on
+  // SendInput (which returns 0 in headless sessions).
+  static void ClampDelta(int& dx, int& dy);
+
   // Atomic down/up of the primary (left) mouse button. Down is a no-op
   // when the button is already logically held; Up is a no-op when it is
   // not held.

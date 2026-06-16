@@ -44,7 +44,17 @@ class ProfileGuard {
  public:
   explicit ProfileGuard(const char* name, bool enabled = true,
                         double warnThresholdMs = 60.0)
-      : name_(name), enabled_(enabled), start_(Clock::now()) {}
+      : name_(name),
+        enabled_(enabled),
+        threshold_(warnThresholdMs),
+        start_(Clock::now()) {}
+
+  // Read-only accessor used by tests to verify the constructor stored
+  // the threshold it was given. The original bug was that `threshold_`
+  // was not in the member initializer list — its value was
+  // indeterminate, so a "0.0" stack layout would silently log a warn
+  // for every sample and flood the console at the pipeline cadence.
+  double ThresholdForTest() const { return threshold_; }
 
   ~ProfileGuard() {
     if (!enabled_) return;

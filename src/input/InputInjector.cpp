@@ -65,8 +65,29 @@ InputInjector& InputInjector::Get() {
 
 InputInjector::InputInjector() = default;
 
+void InputInjector::ClampDelta(int& dx, int& dy) {
+  if (dx >  kMaxMovePerCall) dx =  kMaxMovePerCall;
+  if (dx < -kMaxMovePerCall) dx = -kMaxMovePerCall;
+  if (dy >  kMaxMovePerCall) dy =  kMaxMovePerCall;
+  if (dy < -kMaxMovePerCall) dy = -kMaxMovePerCall;
+}
+
 void InputInjector::MoveCursor(int dx, int dy) {
   if (dx == 0 && dy == 0) return;
+
+  // Defense-in-depth: hard-clamp the per-call pixel delta before it
+  // reaches SendInput. CursorController's sensitivity * dead-zone
+  // math can produce a few-hundred-pixel jump in a single frame if
+  // the hand detector returns a noisy first sample or if a future
+  // bug skips the dead-zone. Without this clamp, a single bad frame
+  // yanks the OS cursor to a corner and the user can't recover
+  // without force-quitting (this is the failure mode that motivated
+  // adding the clamp).
+  //
+  // The clamp is applied BEFORE monitor scaling so the bound is
+  // expressed in the gesture-pipeline's own reference units, which
+  // is what we actually want to limit.
+  ClampDelta(dx, dy);
 
   // The gesture pipeline produces deltas in a normalized 1920-wide
   // reference space (see CursorController). We scale them to the
