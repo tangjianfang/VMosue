@@ -43,8 +43,6 @@ TEST_F(CalibrationTest, SaveLoadRoundTrip) {
   c.SetBaseDir(baseDir_);
 
   vmosue::CalibrationParams p;
-  p.pinchThreshold = 0.05f;
-  p.airClickZThreshold = 0.03f;
   p.scaleX = 1.25f;
   p.scaleY = 0.875f;
   p.offsetX = -10.0f;
@@ -55,8 +53,6 @@ TEST_F(CalibrationTest, SaveLoadRoundTrip) {
 
   auto loaded = c.Load("test_user");
   ASSERT_TRUE(loaded.isOk()) << loaded.error();
-  EXPECT_FLOAT_EQ(loaded.value().pinchThreshold, 0.05f);
-  EXPECT_FLOAT_EQ(loaded.value().airClickZThreshold, 0.03f);
   EXPECT_FLOAT_EQ(loaded.value().scaleX, 1.25f);
   EXPECT_FLOAT_EQ(loaded.value().scaleY, 0.875f);
   EXPECT_FLOAT_EQ(loaded.value().offsetX, -10.0f);

@@ -31,8 +31,6 @@ bool IsSafeProfileName(const std::string& name) {
 
 nlohmann::json ParamsToJson(const CalibrationParams& p) {
   nlohmann::json j;
-  j["pinchThreshold"] = p.pinchThreshold;
-  j["airClickZThreshold"] = p.airClickZThreshold;
   j["scaleX"] = p.scaleX;
   j["scaleY"] = p.scaleY;
   j["offsetX"] = p.offsetX;
@@ -44,12 +42,16 @@ CalibrationParams ParamsFromJson(const nlohmann::json& j) {
   CalibrationParams p;
   // Use value() with defaults so missing fields fall back to the
   // struct's in-class default rather than failing the whole load.
-  p.pinchThreshold = j.value("pinchThreshold", p.pinchThreshold);
-  p.airClickZThreshold = j.value("airClickZThreshold", p.airClickZThreshold);
   p.scaleX = j.value("scaleX", p.scaleX);
   p.scaleY = j.value("scaleY", p.scaleY);
   p.offsetX = j.value("offsetX", p.offsetX);
   p.offsetY = j.value("offsetY", p.offsetY);
+  // v0.5 (Wave 4): silently ignore the legacy pinchThreshold and
+  // airClickZThreshold fields from older profiles. Both have moved
+  // to the adaptive controller; reading them and assigning into
+  // p.<field> would not compile because the fields no longer exist.
+  (void)j.value("pinchThreshold", 0.04f);
+  (void)j.value("airClickZThreshold", 0.02f);
   return p;
 }
 

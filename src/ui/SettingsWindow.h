@@ -1,26 +1,29 @@
 #pragma once
-// Task 27: Settings dialog with camera, sensitivity, perf mode,
-// calibration, and auto-start controls.
+// v0.5 (Wave 4): Settings dialog. The v0.4 sensitivity and
+// air-click-threshold sliders are gone — every tunable is now a
+// deterministic function of observable signals (see util/Adaptive.h),
+// so there is no user preference to expose. In their place we render
+// a live readout of the adaptive values the controller is currently
+// using, refreshed 4x/sec via WM_TIMER. The user can see that the
+// system is alive and adapting without being able to push it off
+// course.
 //
-// v0.2 implementation: a modeless top-level Win32 window built at
-// runtime with CreateWindowEx (no .rc resource file). Children are
-// created in WM_CREATE: a combobox for cameras, a combobox for perf
-// mode, two trackbar sliders for sensitivity and air-click
-// sensitivity, a checkbox for auto-start, and a button to launch the
-// calibration flow.
+// Children: camera dropdown, performance-mode dropdown, a header
+// strip ("Adaptive (auto) — values derive from your hand and
+// environment"), 8 STATIC labels that show the current adaptive
+// values, the auto-start checkbox, and the calibration button.
 //
-// Save semantics: on WM_CLOSE the current control values are read
-// into vmosue::Config::Get().Mutable() and persisted with
-// Config::Get().Save(). The air-click sensitivity is also written
-// into Calibration::Save(activeProfile, params) so the gesture
-// detector picks it up on the next frame.
+// Save semantics: on WM_CLOSE we persist what the user can change
+// (camera index, performance mode, auto-start). The adaptive values
+// are not persisted because they are recomputed every frame from
+// observable signals.
 //
 // Threading: all public methods must be called from the main (UI)
-// thread that owns the parent HWND; the same constraint that
-// OverlayWindow and TrayIcon carry.
+// thread that owns the parent HWND.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <array>
 #include <windows.h>
 
 namespace vmosue {
@@ -59,23 +62,28 @@ class SettingsWindow {
   // Build all child controls. Called once from WM_CREATE.
   void CreateControls();
 
-  // Populate the camera dropdown. v0.2 falls back to a single
-  // "Default Camera" entry; Task 28 will replace this with the real
-  // CameraCapture::EnumerateDevices() output.
+  // Populate the camera dropdown from the current Config on entry.
   void PopulateCameras();
 
   // Pull the current control values into the form, ready to display.
   void LoadFromConfig();
 
+  // Refresh the 8 live-readout STATIC labels from the adaptive
+  // controller. Called on WM_TIMER (4 Hz) and on Show() so the
+  // user always sees a fresh value when they open the window.
+  void UpdateReadouts();
+
+  // Number of live-readout labels. Indexed by kReadout* constants
+  // in the .cpp.
+  static constexpr int kReadoutCount = 8;
+
   HWND hwnd_ = nullptr;
   HWND hwndCameraCombo_ = nullptr;
   HWND hwndPerfCombo_   = nullptr;
-  HWND hwndSensTrack_   = nullptr;
-  HWND hwndAirSensTrack_= nullptr;
   HWND hwndAutoStartChk_= nullptr;
   HWND hwndCalibBtn_    = nullptr;
-  HWND hwndSensLabel_   = nullptr;
-  HWND hwndAirSensLabel_= nullptr;
+  HWND hwndReadoutHeader_ = nullptr;
+  std::array<HWND, kReadoutCount> hwndReadouts_{};
 };
 
 }  // namespace vmosue

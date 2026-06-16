@@ -54,7 +54,6 @@ TEST_F(ConfigTest, SaveLoadRoundTrip) {
   c.Mutable().performanceMode = "performance";
   c.Mutable().autoStart = true;
   c.Mutable().showTutorialOnLaunch = false;
-  c.Mutable().sensitivity = 1.75f;
   c.Mutable().logLevel = "debug";
 
   auto saved = c.Save();
@@ -73,7 +72,6 @@ TEST_F(ConfigTest, SaveLoadRoundTrip) {
   EXPECT_EQ(c.Data().performanceMode, std::string("performance"));
   EXPECT_TRUE(c.Data().autoStart);
   EXPECT_FALSE(c.Data().showTutorialOnLaunch);
-  EXPECT_FLOAT_EQ(c.Data().sensitivity, 1.75f);
   EXPECT_EQ(c.Data().logLevel, std::string("debug"));
 }
 
@@ -98,7 +96,6 @@ TEST_F(ConfigTest, RecoversFromCorruption) {
   EXPECT_EQ(c.Data().performanceMode, std::string("balanced"));
   EXPECT_FALSE(c.Data().autoStart);
   EXPECT_TRUE(c.Data().showTutorialOnLaunch);
-  EXPECT_FLOAT_EQ(c.Data().sensitivity, 1.0f);
   EXPECT_EQ(c.Data().logLevel, std::string("info"));
 }
 
@@ -118,7 +115,6 @@ TEST_F(ConfigTest, DefaultsAreCorrect) {
   EXPECT_EQ(c.Data().performanceMode, std::string("balanced"));
   EXPECT_FALSE(c.Data().autoStart);
   EXPECT_TRUE(c.Data().showTutorialOnLaunch);
-  EXPECT_FLOAT_EQ(c.Data().sensitivity, 1.0f);
   EXPECT_EQ(c.Data().logLevel, std::string("info"));
 }
 

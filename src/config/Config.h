@@ -11,13 +11,19 @@ namespace vmosue {
 // JSON file under %LOCALAPPDATA%\VMosue\config.json by default. Every
 // field has an in-class default so a fresh install (or a corrupted
 // config file) still produces a usable configuration.
+//
+// v0.5 (Wave 4): the user-facing `sensitivity` field is removed. The
+// v0.4 slider let the user bias cursor speed; in v0.5 every tunable
+// is a deterministic function of observable signals, so there is no
+// user preference to persist. The serializer remains tolerant of old
+// configs that still contain the field (it just gets ignored) so a
+// v0.4 → v0.5 upgrade does not require a one-shot migration step.
 struct AppConfig {
   std::string activeProfile = "default";
   int cameraIndex = 0;
   std::string performanceMode = "balanced";
   bool autoStart = false;
   bool showTutorialOnLaunch = true;
-  float sensitivity = 1.0f;
   std::string logLevel = "info";
 };
 

@@ -8,9 +8,20 @@ namespace vmosue {
 // Tunable per-user parameters produced by the calibration flow and
 // consumed by the gesture detectors. Defaults match the project's
 // baseline so a fresh install still works without running calibration.
+//
+// v0.5 (Wave 4): the per-profile `airClickZThreshold` is removed —
+// the adaptive controller's ZApproachThreshold() derives the value
+// from observed z-axis noise at runtime. The pinchThreshold is also
+// superseded by the adaptive ClickDetector pinch / release pair
+// (see util/Adaptive.h). What remains (scaleX/Y/offsetX/Y) is a
+// per-user coordinate-map transform that the adaptive controller
+// intentionally does not own: it is a user-body-geometry term that
+// the rolling-window statistics cannot recover on their own.
+// Calibration::RunInteractive() is still a stub (see
+// Calibration::RunInteractive() below) — when it ships, it will
+// only need to set those four fields; the other tunables have
+// moved to the adaptive layer.
 struct CalibrationParams {
-  float pinchThreshold = 0.04f;
-  float airClickZThreshold = 0.02f;
   float scaleX = 1.0f;
   float scaleY = 1.0f;
   float offsetX = 0.0f;

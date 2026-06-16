@@ -30,7 +30,6 @@ nlohmann::json ConfigToJson(const AppConfig& c) {
   j["performanceMode"] = c.performanceMode;
   j["autoStart"] = c.autoStart;
   j["showTutorialOnLaunch"] = c.showTutorialOnLaunch;
-  j["sensitivity"] = c.sensitivity;
   j["logLevel"] = c.logLevel;
   return j;
 }
@@ -47,7 +46,11 @@ AppConfig ConfigFromJson(const nlohmann::json& j) {
   c.autoStart = j.value("autoStart", c.autoStart);
   c.showTutorialOnLaunch =
       j.value("showTutorialOnLaunch", c.showTutorialOnLaunch);
-  c.sensitivity = j.value("sensitivity", c.sensitivity);
+  // v0.5 (Wave 4): ignore a legacy `sensitivity` field from v0.4
+  // configs. The field is no longer part of the schema; the adaptive
+  // controller derives the equivalent behaviour from observable
+  // signals at runtime.
+  (void)j.value("sensitivity", 1.0f);
   c.logLevel = j.value("logLevel", c.logLevel);
   return c;
 }

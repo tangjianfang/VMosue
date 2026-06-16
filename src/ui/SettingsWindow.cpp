@@ -4,6 +4,7 @@
 #include "config/Calibration.h"
 #include "config/Config.h"
 #include "platform/AutoStart.h"
+#include "util/Adaptive.h"
 #include "util/I18n.h"
 #include "util/Logger.h"
 
@@ -28,17 +29,28 @@ static SettingsWindow* g_settings = nullptr;
 // SDK projects). LOWORD(wParam) on WM_COMMAND carries these.
 static constexpr UINT_PTR kIdCameraCombo    = 0xA001;
 static constexpr UINT_PTR kIdPerfCombo      = 0xA002;
-static constexpr UINT_PTR kIdSensTrack      = 0xA003;
-static constexpr UINT_PTR kIdAirSensTrack   = 0xA004;
 static constexpr UINT_PTR kIdAutoStartChk   = 0xA005;
 static constexpr UINT_PTR kIdCalibBtn       = 0xA006;
+static constexpr UINT_PTR kIdReadoutTimer   = 0xA010;
+
+// v0.5 (Wave 4): the live-readout section replaces the v0.4
+// sliders. WM_TIMER fires at 4 Hz — fast enough that the user
+// sees a fresh value when they nudge their hand, slow enough that
+// the SetWindowTextW churn doesn't compete with the model loop.
+static constexpr UINT kReadoutTimerMs = 250;
 
 // Layout constants. The window is fixed-size (no WS_THICKFRAME /
 // WS_MAXIMIZEBOX) so we can hard-code coordinates. Each row is
-// label_left + spacer + control. Controls are vertically stacked
-// from y=kRowStart with kRowGap between rows.
+// label_left + spacer + control. The "Adaptive (auto)" header
+// introduces a compact section below the performance dropdown
+// where the readouts are stacked at kReadoutRowH with no extra
+// gap, so a single column of 8 readouts takes about 200 px.
 static constexpr int kWindowW     = 480;
-static constexpr int kWindowH     = 420;
+// Window is tall enough to hold: camera (0), perf mode (1), header
+// (~150), 8 readouts at 22 px each, autostart, calibrate. Picked
+// 520 to leave some breathing room without overflowing typical
+// 1080p screens.
+static constexpr int kWindowH     = 520;
 static constexpr int kRowStart    = 20;
 static constexpr int kRowGap      = 56;
 static constexpr int kLabelX      = 16;
@@ -46,25 +58,13 @@ static constexpr int kLabelW      = 180;
 static constexpr int kControlX    = 200;
 static constexpr int kControlW    = 260;
 static constexpr int kControlH    = 24;
-
-// Sensitivity slider range. 0..2500 maps to 0.5..3.0 with one
-// decimal precision (step = 0.01 = 10 raw units, but we render
-// only the integer tenth so 0.01 is sub-step). Default 1.0 is
-// raw = (1.0 - 0.5) * 1000 = 500.
-static constexpr int  kSensRawMin       = 0;
-static constexpr int  kSensRawMax       = 2500;
-static constexpr int  kSensDefaultRaw   = 500;
-static constexpr float kSensRangeMin    = 0.5f;
-static constexpr float kSensRangeMax    = 3.0f;
-
-// Air-click sensitivity slider range. 0..190 maps to 0.005..0.10
-// (step 0.005). Default 0.02 -> raw = (0.02 - 0.005) / 0.0005 = 30.
-static constexpr int   kAirRawMin       = 0;
-static constexpr int   kAirRawMax       = 190;
-static constexpr int   kAirDefaultRaw   = 30;
-static constexpr float kAirRangeMin     = 0.005f;
-static constexpr float kAirRangeMax     = 0.10f;
-static constexpr float kAirRangeStep    = 0.0005f;
+static constexpr int kHeaderY     = kRowStart + 2 * kRowGap;       // 132
+static constexpr int kReadoutX    = kLabelX;
+static constexpr int kReadoutY    = kHeaderY + 24;                 // 156
+static constexpr int kReadoutRowH = 22;
+// AutoStart sits below the readout section.
+static constexpr int kAutoStartY  = kReadoutY + kReadoutRowH * 8;  // 332
+static constexpr int kCalibY      = kAutoStartY + kRowGap;         // 388
 
 // Performance-mode combo options. Order matches kPerfModeStrings
 // below; selected index maps directly to AppConfig::performanceMode.
@@ -76,63 +76,63 @@ static const wchar_t* const kPerfModeStrings[] = {
 static constexpr int kPerfModeCount =
     sizeof(kPerfModeStrings) / sizeof(kPerfModeStrings[0]);
 
-// Convert sensitivity slider position (raw integer) to a float in
-// [kSensRangeMin, kSensRangeMax]. Linear mapping; no rounding
-// tricks needed because we round to 0.01 at the call sites.
-float SensRawToFloat(int raw) {
-  float t = static_cast<float>(raw) /
-            static_cast<float>(kSensRawMax - kSensRawMin);
-  return kSensRangeMin + t * (kSensRangeMax - kSensRangeMin);
+// Format helpers for each readout. Each Format* fn is a thin
+// adapter from a single adaptive value to the label text the user
+// sees. Putting them in one namespace-private block makes the
+// kReadout* index ↔ formatter mapping easy to audit at a glance.
+std::wstring FormatPinch(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Click pinch:      %.3f", v);
+  return b;
 }
-int SensFloatToRaw(float v) {
-  float t = (v - kSensRangeMin) / (kSensRangeMax - kSensRangeMin);
-  if (t < 0.0f) t = 0.0f;
-  if (t > 1.0f) t = 1.0f;
-  return static_cast<int>(t * (kSensRawMax - kSensRawMin) + 0.5f);
+std::wstring FormatRelease(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Click release:    %.3f", v);
+  return b;
 }
-
-// Air-click slider position <-> CalibrationParams::airClickZThreshold.
-float AirRawToFloat(int raw) {
-  return kAirRangeMin + static_cast<float>(raw) * kAirRangeStep;
+std::wstring FormatScrollEnter(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Scroll enter:     %.3f", v);
+  return b;
 }
-int AirFloatToRaw(float v) {
-  float t = (v - kAirRangeMin) / (kAirRangeMax - kAirRangeMin);
-  if (t < 0.0f) t = 0.0f;
-  if (t > 1.0f) t = 1.0f;
-  return static_cast<int>(t * (kAirRawMax - kAirRawMin) + 0.5f);
+std::wstring FormatScrollExit(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Scroll exit:      %.3f", v);
+  return b;
 }
-
-// Format "sensitivity: 1.20" / "air click: 0.020" style labels.
-// Two decimals for the cursor sensitivity, three for the air
-// threshold (which is naturally a small number).
-std::wstring FormatSensLabel(float v) {
-  wchar_t buf[64];
-  swprintf_s(buf, L"Cursor sensitivity: %.2fx", v);
-  return buf;
+std::wstring FormatScrollScale(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Scroll scale:     %.0f px/u", v);
+  return b;
 }
-std::wstring FormatAirLabel(float v) {
-  wchar_t buf[64];
-  swprintf_s(buf, L"Air click sensitivity: %.3f", v);
-  return buf;
+std::wstring FormatDeadZone(float v) {
+  wchar_t b[64];
+  // Dead zone is a normalized fraction; multiplying by 100 gives
+  // a percent which is more intuitive ("1.8% of frame") than
+  // "0.018".
+  swprintf_s(b, L"Cursor deadzone:  %.2f%%", v * 100.0f);
+  return b;
 }
-
-// Copy at most dstsz-1 wide chars from src into dst, NUL-terminating.
-void CopyWide(wchar_t* dst, size_t dstsz, const wchar_t* src) {
-  if (!dst || dstsz == 0) return;
-  if (!src) { dst[0] = 0; return; }
-  size_t i = 0;
-  for (; i + 1 < dstsz && src[i]; ++i) dst[i] = src[i];
-  dst[i] = 0;
+std::wstring FormatZApproach(float v) {
+  wchar_t b[64];
+  swprintf_s(b, L"Z approach:       %.3f m", v);
+  return b;
+}
+std::wstring FormatLandmarkFilter(double mincutoff, double beta) {
+  wchar_t b[64];
+  swprintf_s(b, L"OneEuro (min/β):  %.2f / %.3f", mincutoff, beta);
+  return b;
 }
 
 }  // namespace
 
 SettingsWindow::~SettingsWindow() {
-  // Best-effort tear-down: hide the window, then destroy it. The
-  // destructor does not call SaveToConfig (the user may be
-  // discarding changes). Callers that want to save on close should
-  // do so via WM_CLOSE.
+  // Best-effort tear-down: kill the readout timer (if any), hide
+  // the window, then destroy it. The destructor does not call
+  // SaveToConfig (the user may be discarding changes). Callers
+  // that want to save on close should do so via WM_CLOSE.
   if (hwnd_) {
+    KillTimer(hwnd_, kIdReadoutTimer);
     DestroyWindow(hwnd_);
     hwnd_ = nullptr;
   }
@@ -220,58 +220,43 @@ void SettingsWindow::CreateControls() {
                  reinterpret_cast<LPARAM>(kPerfModeStrings[i]));
   }
 
-  // Row 2: Sensitivity slider + live label
-  hwndSensLabel_ = CreateWindowEx(0, L"STATIC", L"Cursor sensitivity: 1.00x",
-                                  WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                  kLabelX, kRowStart + 2 * kRowGap,
-                                  kLabelW, kControlH,
-                                  hwnd_, nullptr, hinst, nullptr);
-  hwndSensTrack_ = CreateWindowEx(0, TRACKBAR_CLASS, nullptr,
-                                  WS_CHILD | WS_VISIBLE | TBS_HORZ
-                                      | TBS_AUTOTICKS,
-                                  kControlX, kRowStart + 2 * kRowGap - 4,
-                                  kControlW, kControlH + 8,
-                                  hwnd_, reinterpret_cast<HMENU>(kIdSensTrack),
-                                  hinst, nullptr);
-  SendMessageW(hwndSensTrack_, TBM_SETRANGE, TRUE,
-               MAKELONG(kSensRawMin, kSensRawMax));
-  SendMessageW(hwndSensTrack_, TBM_SETPOS, TRUE, kSensDefaultRaw);
+  // v0.5 (Wave 4): the "Adaptive (auto)" header strip introduces
+  // the live-readout section. The subtitle hints at the philosophy:
+  // these values are derived from observation, not configuration.
+  hwndReadoutHeader_ = CreateWindowEx(
+      0, L"STATIC",
+      L"Adaptive (auto) — values derive from your hand and environment",
+      WS_CHILD | WS_VISIBLE | SS_LEFT,
+      kReadoutX, kHeaderY, kWindowW - 2 * kReadoutX, kControlH,
+      hwnd_, nullptr, hinst, nullptr);
 
-  // Row 3: Air click sensitivity slider + live label
-  hwndAirSensLabel_ = CreateWindowEx(0, L"STATIC",
-                                     L"Air click sensitivity: 0.020",
-                                     WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                     kLabelX, kRowStart + 3 * kRowGap,
-                                     kLabelW, kControlH,
-                                     hwnd_, nullptr, hinst, nullptr);
-  hwndAirSensTrack_ = CreateWindowEx(0, TRACKBAR_CLASS, nullptr,
-                                     WS_CHILD | WS_VISIBLE | TBS_HORZ
-                                         | TBS_AUTOTICKS,
-                                     kControlX, kRowStart + 3 * kRowGap - 4,
-                                     kControlW, kControlH + 8,
-                                     hwnd_, reinterpret_cast<HMENU>(kIdAirSensTrack),
-                                     hinst, nullptr);
-  SendMessageW(hwndAirSensTrack_, TBM_SETRANGE, TRUE,
-               MAKELONG(kAirRawMin, kAirRawMax));
-  SendMessageW(hwndAirSensTrack_, TBM_SETPOS, TRUE, kAirDefaultRaw);
+  // 8 STATIC labels, one per adaptive value we want to surface.
+  // The order is fixed; UpdateReadouts() iterates in the same
+  // order to refresh. Each label gets a 22-px row, no extra gap.
+  for (int i = 0; i < kReadoutCount; ++i) {
+    hwndReadouts_[i] = CreateWindowEx(
+        0, L"STATIC", L"—",  // em-dash placeholder until first tick
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        kReadoutX, kReadoutY + i * kReadoutRowH,
+        kWindowW - 2 * kReadoutX, kReadoutRowH,
+        hwnd_, nullptr, hinst, nullptr);
+  }
 
-  // Row 4: AutoStart checkbox (Task 32 wires the real Enable/Disable;
-  // for v0.2 it is a UI-only checkbox whose state is read into
-  // config.autoStart on close).
+  // AutoStart checkbox (sits below the readout section).
   hwndAutoStartChk_ = CreateWindowEx(0, WC_BUTTON, L"Start VMosue with Windows",
                                      WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                     kLabelX, kRowStart + 4 * kRowGap,
+                                     kLabelX, kAutoStartY,
                                      kControlW + kLabelW, kControlH,
                                      hwnd_, reinterpret_cast<HMENU>(kIdAutoStartChk),
                                      hinst, nullptr);
 
-  // Row 5: Run calibration button. Calibration::RunInteractive() is
-  // a stub in v0.2 (see Task 22); clicking the button just shows a
-  // message so the user knows the wiring exists but the flow is not
-  // implemented yet.
+  // Run calibration button. Calibration::RunInteractive() is a
+  // stub (see Calibration::RunInteractive()); clicking the button
+  // just shows a message so the user knows the wiring exists but
+  // the flow is not implemented yet.
   hwndCalibBtn_ = CreateWindowEx(0, WC_BUTTON, L"Run calibration...",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                 kLabelX, kRowStart + 5 * kRowGap,
+                                 kLabelX, kCalibY,
                                  kControlW, kControlH + 6,
                                  hwnd_, reinterpret_cast<HMENU>(kIdCalibBtn),
                                  hinst, nullptr);
@@ -282,8 +267,8 @@ void SettingsWindow::PopulateCameras() {
   // Clear any previous entries (Show() may be called multiple times).
   SendMessageW(hwndCameraCombo_, CB_RESETCONTENT, 0, 0);
 
-  // Task 28: query Media Foundation for the actual list of video
-  // capture devices. EnumerateDevices() is static and may safely be
+  // Query Media Foundation for the actual list of video capture
+  // devices. EnumerateDevices() is static and may safely be
   // called from the UI thread before the App has spun up its
   // capture worker. If it returns an empty list (e.g. running in a
   // session with no camera permissions, or the stub fallback path
@@ -303,8 +288,8 @@ void SettingsWindow::PopulateCameras() {
 
   // Select the current cameraIndex if it falls inside the
   // list range; otherwise fall back to 0. We allow empty
-  // enumeration to still pick index 0 (the placeholder) so
-  // the user sees something selected rather than no selection.
+  // enumeration to still pick index 0 (the placeholder) so the
+  // user sees something selected rather than no selection.
   const auto& cfg = Config::Get().Data();
   int sel = cfg.cameraIndex;
   if (sel < 0) sel = 0;
@@ -339,28 +324,10 @@ void SettingsWindow::LoadFromConfig() {
     SendMessageW(hwndPerfCombo_, CB_SETCURSEL, perfIdx, 0);
   }
 
-  // Sliders: convert float to raw int.
-  if (hwndSensTrack_) {
-    SendMessageW(hwndSensTrack_, TBM_SETPOS, TRUE,
-                 SensFloatToRaw(cfg.sensitivity));
-    if (hwndSensLabel_) {
-      SetWindowTextW(hwndSensLabel_, FormatSensLabel(cfg.sensitivity).c_str());
-    }
-  }
-  if (hwndAirSensTrack_) {
-    // We do not store airClickZThreshold in AppConfig; for v0.2 we
-    // load from Calibration::Load(activeProfile) and fall back to
-    // the default if the profile is missing or malformed.
-    Calibration calib;
-    CalibrationParams params;
-    auto loaded = calib.Load(cfg.activeProfile);
-    float airVal = loaded.isOk() ? loaded.value().airClickZThreshold
-                                 : params.airClickZThreshold;
-    SendMessageW(hwndAirSensTrack_, TBM_SETPOS, TRUE, AirFloatToRaw(airVal));
-    if (hwndAirSensLabel_) {
-      SetWindowTextW(hwndAirSensLabel_, FormatAirLabel(airVal).c_str());
-    }
-  }
+  // v0.5: readouts start with a fresh adaptive snapshot so the
+  // user sees real values, not em-dashes, the first time they
+  // open the window (before the first WM_TIMER tick).
+  UpdateReadouts();
 
   // AutoStart checkbox reflects the live registry state. The
   // registry is the source of truth for "is autostart on right
@@ -373,6 +340,33 @@ void SettingsWindow::LoadFromConfig() {
                  AutoStart::IsEnabled() ? BST_CHECKED
                                         : BST_UNCHECKED, 0);
   }
+}
+
+void SettingsWindow::UpdateReadouts() {
+  if (!hwnd_) return;
+  const auto& a = GetAdaptive();
+  // Read each value once, format, push. The order MUST match the
+  // hwndReadouts_[i] creation order in CreateControls() — index i
+  // in the array corresponds to index i in this assignment.
+  // Mismatch here would scramble the labels.
+  const auto click = std::make_pair(a.PinchThreshold(), a.ReleaseThreshold());
+  const auto scroll = std::make_pair(a.ScrollEnterThreshold(),
+                                     a.ScrollExitThreshold());
+  const auto oneEuro = a.LandmarkFilterParams();
+
+  auto set = [&](int i, const std::wstring& s) {
+    if (hwndReadouts_[i]) {
+      SetWindowTextW(hwndReadouts_[i], s.c_str());
+    }
+  };
+  set(0, FormatPinch(click.first));
+  set(1, FormatRelease(click.second));
+  set(2, FormatScrollEnter(scroll.first));
+  set(3, FormatScrollExit(scroll.second));
+  set(4, FormatScrollScale(a.ScrollScaleFactor()));
+  set(5, FormatDeadZone(a.CursorDeadZone()));
+  set(6, FormatZApproach(a.ZApproachThreshold()));
+  set(7, FormatLandmarkFilter(oneEuro.first, oneEuro.second));
 }
 
 void SettingsWindow::Show() {
@@ -422,31 +416,9 @@ void SettingsWindow::SaveToConfig() {
     }
   }
 
-  // Sliders.
-  if (hwndSensTrack_) {
-    int raw = static_cast<int>(SendMessageW(hwndSensTrack_,
-                                             TBM_GETPOS, 0, 0));
-    cfg.sensitivity = SensRawToFloat(raw);
-  }
-
-  // Air click sensitivity: write into a CalibrationParams, also
-  // starting from whatever the active profile currently holds (so
-  // we do not clobber pinchThreshold / scaleX / scaleY / etc).
-  if (hwndAirSensTrack_) {
-    int raw = static_cast<int>(SendMessageW(hwndAirSensTrack_,
-                                             TBM_GETPOS, 0, 0));
-    float airVal = AirRawToFloat(raw);
-    Calibration calib;
-    CalibrationParams params;
-    auto loaded = calib.Load(cfg.activeProfile);
-    if (loaded.isOk()) params = loaded.value();
-    params.airClickZThreshold = airVal;
-    auto saved = calib.Save(cfg.activeProfile, params);
-    if (!saved.isOk()) {
-      VMOSUE_LOG_WARN("SettingsWindow: Calibration::Save failed: {}",
-                      saved.error());
-    }
-  }
+  // v0.5: the cursor sensitivity and air-click threshold are
+  // gone — neither is user-configurable anymore. Nothing to do
+  // for them.
 
   // AutoStart checkbox. The WM_COMMAND handler already updated
   // cfg.autoStart and the registry on toggle; we still re-read the
@@ -498,40 +470,42 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
       self->CreateControls();
       self->PopulateCameras();
       self->LoadFromConfig();
+      // Start the 4 Hz refresh timer so the adaptive readouts
+      // update as the user moves their hand. The timer keeps
+      // running while the window is visible; we stop it on hide
+      // (see WM_TIMER + WM_CLOSE below) so a hidden window
+      // doesn't keep churning SetWindowTextW.
+      SetTimer(hwnd, kIdReadoutTimer, kReadoutTimerMs, nullptr);
       return 0;
 
-    case WM_HSCROLL:
-      // Slider thumb moved. Update the live label so the user
-      // sees the new value as they drag. We do not save on every
-      // tick — save happens on WM_CLOSE so the user can cancel by
-      // closing without confirming.
-      if (self->hwndSensLabel_ && self->hwndSensTrack_) {
-        int raw = static_cast<int>(SendMessageW(self->hwndSensTrack_,
-                                                 TBM_GETPOS, 0, 0));
-        SetWindowTextW(self->hwndSensLabel_,
-                       FormatSensLabel(SensRawToFloat(raw)).c_str());
+    case WM_TIMER:
+      // Refresh readouts. We don't guard on visibility because
+      // the timer is killed on WM_CLOSE; if a future change moves
+      // the timer to a permanent owner, add a visibility check
+      // here so a hidden window doesn't waste CPU.
+      if (w == kIdReadoutTimer) {
+        self->UpdateReadouts();
+        return 0;
       }
-      if (self->hwndAirSensLabel_ && self->hwndAirSensTrack_) {
-        int raw = static_cast<int>(SendMessageW(self->hwndAirSensTrack_,
-                                                 TBM_GETPOS, 0, 0));
-        SetWindowTextW(self->hwndAirSensLabel_,
-                       FormatAirLabel(AirRawToFloat(raw)).c_str());
-      }
-      return 0;
+      break;
 
     case WM_COMMAND: {
       UINT id = LOWORD(w);
       UINT code = HIWORD(w);
       if (id == kIdCalibBtn && code == BN_CLICKED) {
-        // v0.2: Calibration::RunInteractive() returns Err (Task 22
-        // stub). Show a message so the user knows the wiring is in
-        // place but the flow is not implemented yet. When Task 22
-        // lands, replace this with a real launch.
+        // Calibration::RunInteractive() returns Err (stub). Show
+        // a message so the user knows the wiring is in place but
+        // the flow is not implemented yet. When the real
+        // calibration lands, it will only need to set the four
+        // scale/offset fields in CalibrationParams — the
+        // pinch/release/scroll/z thresholds are now adaptive.
         Calibration calib;
         auto r = calib.RunInteractive();
         if (!r.isOk()) {
           MessageBoxW(hwnd,
-                      L"Calibration flow not yet implemented (see Task 22 stub).",
+                      L"Calibration flow not yet implemented (stub). "
+                      L"v0.5 derives thresholds from observation; the "
+                      L"calibration flow only sets cursor scale/offset.",
                       L"VMosue", MB_OK | MB_ICONINFORMATION);
         }
         return 0;
@@ -566,13 +540,15 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
         return 0;
       }
       // Combo / checkbox edits are reflected in the live label and
-      // persisted on close; nothing to do here for v0.2.
+      // persisted on close; nothing to do here for v0.5.
       return 0;
     }
 
     case WM_CLOSE:
       // Save then hide. We hide (not destroy) so reopening is
-      // instant — CreateControls only runs once.
+      // instant — CreateControls only runs once. Kill the readout
+      // timer first so a hidden window doesn't keep churning.
+      KillTimer(hwnd, kIdReadoutTimer);
       self->SaveToConfig();
       ShowWindow(hwnd, SW_HIDE);
       return 0;
@@ -582,7 +558,7 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
       // We do not call Save here because WM_CLOSE already saved.
       // If WM_DESTROY arrives without WM_CLOSE (rare — e.g. task-
       // kill), the user's last edits are lost; that is acceptable
-      // for v0.2 and matches the typical Windows contract that
+      // for v0.5 and matches the typical Windows contract that
       // WM_CLOSE is the save point.
       if (g_settings == self) g_settings = nullptr;
       self->hwnd_ = nullptr;
@@ -591,6 +567,7 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
     default:
       return DefWindowProc(hwnd, msg, w, l);
   }
+  return DefWindowProc(hwnd, msg, w, l);
 }
 
 }  // namespace vmosue

@@ -538,8 +538,12 @@ void DebugWindow::render() {
   DrawLine(renderTarget_, brushWhite_, panelX, y,
            L"Perf mode:      " + perfMode);
   y += 18.0f;
+  // v0.5 (Wave 4): the per-user `sensitivity` field is gone. Show
+  // a one-line "Sensitivity: adaptive" marker so the debug panel
+  // makes the change visible; the actual current value is
+  // available in the Settings window's live readouts.
   DrawLine(renderTarget_, brushWhite_, panelX, y,
-           L"Sensitivity:    " + Fmt1(cfg.sensitivity));
+           L"Sensitivity:    adaptive (auto)");
   y += 18.0f;
   std::wstring logLevel(cfg.logLevel.begin(), cfg.logLevel.end());
   DrawLine(renderTarget_, brushWhite_, panelX, y,
