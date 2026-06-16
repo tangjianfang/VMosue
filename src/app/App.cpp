@@ -677,6 +677,15 @@ void App::stateMachineLoop() {
           fb.cursorY = right->points[5].y;
           fb.confidence = right->score;
           fb.rightHandCount = 1;
+          // v0.4: pipe the dominant hand's 21 landmarks to the overlay
+          // so it can render the skeleton. points is std::array<Point2F, 21>
+          // which matches Feedback::landmarks — assignment does a deep copy.
+          fb.landmarks = right->points;
+          fb.hasHand = true;
+        } else {
+          // No right hand this tick — clear the flag so the overlay draws
+          // nothing (instead of drawing a stale skeleton).
+          fb.hasHand = false;
         }
         for (const auto& h : hands) {
           if (h.handedness == 0) { fb.leftHandCount = 1; break; }
