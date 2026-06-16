@@ -13,8 +13,10 @@
 // Supported conversions:
 //   - NV12 (YUV 4:2:0 semi-planar, limited range) -> BGRA
 //   - BGR24 -> BGRA
+//   - RGBA32 (already BGRA bytes in memory; see comment in
+//     capture/Frame.h about the naming) -> BGRA (pass-through copy)
 //
-// Both are exposed as free functions taking a Frame (capture/Frame.h)
+// All are exposed as free functions taking a Frame (capture/Frame.h)
 // and returning a heap-allocated BGRA buffer. Empty vector = invalid
 // input (zero dimensions, wrong format, undersized data).
 
@@ -27,5 +29,6 @@ namespace vmosue {
 
 std::vector<uint8_t> Nv12FrameToBgra(const Frame& f);
 std::vector<uint8_t> Bgr24FrameToBgra(const Frame& f);
+std::vector<uint8_t> Rgba32FrameToBgra(const Frame& f);
 
 }  // namespace vmosue

@@ -10,6 +10,7 @@ namespace {
 
 using vmosue::Bgr24FrameToBgra;
 using vmosue::Nv12FrameToBgra;
+using vmosue::Rgba32FrameToBgra;
 using vmosue::Frame;
 using vmosue::PixelFormat;
 
@@ -28,6 +29,27 @@ Frame MakeSolidBgr24(uint32_t w, uint32_t h, uint8_t b, uint8_t g, uint8_t r) {
     f.data[i * 3 + 0] = b;
     f.data[i * 3 + 1] = g;
     f.data[i * 3 + 2] = r;
+  }
+  return f;
+}
+
+// Build a single-color RGBA32 frame. The four channels map
+// directly to (B, G, R, A) in memory. We deliberately seed
+// alpha=0 in the source so the test can prove the converter
+// forces it to 255.
+Frame MakeSolidRgba32(uint32_t w, uint32_t h,
+                      uint8_t b, uint8_t g, uint8_t r, uint8_t a) {
+  Frame f;
+  f.width = w;
+  f.height = h;
+  f.rowPitch = w * 4u;
+  f.format = PixelFormat::RGBA32;
+  f.data.assign(w * h * 4u, 0);
+  for (uint32_t i = 0; i < w * h; ++i) {
+    f.data[i * 4 + 0] = b;
+    f.data[i * 4 + 1] = g;
+    f.data[i * 4 + 2] = r;
+    f.data[i * 4 + 3] = a;
   }
   return f;
 }
@@ -202,6 +224,38 @@ TEST(FrameConvert, Nv12IgnoresRowPitch) {
   f.rowPitch = 99999;  // nonsense
   auto bgra = Nv12FrameToBgra(f);
   ASSERT_EQ(bgra.size(), 8u * 4u * 4u);
+}
+
+// RGBA32: B/G/R must be preserved, alpha must be forced to 255
+// even if the source left it at 0 (some webcams do that in
+// MFVideoFormat_RGB32, and D2D treats A=0 as transparent which
+// would render the preview as black).
+TEST(FrameConvert, Rgba32PreservesChannelsAndForcesOpaqueAlpha) {
+  auto f = MakeSolidRgba32(8, 6, /*b=*/10, /*g=*/20, /*r=*/30, /*a=*/0);
+  auto bgra = Rgba32FrameToBgra(f);
+  ASSERT_EQ(bgra.size(), 8u * 6u * 4u);
+  for (size_t i = 0; i < 8u * 6u; ++i) {
+    EXPECT_EQ(bgra[i * 4 + 0], 10) << "B at pixel " << i;
+    EXPECT_EQ(bgra[i * 4 + 1], 20) << "G at pixel " << i;
+    EXPECT_EQ(bgra[i * 4 + 2], 30) << "R at pixel " << i;
+    EXPECT_EQ(bgra[i * 4 + 3], 255) << "A at pixel " << i;
+  }
+}
+
+// RGBA32: input validation. Wrong format / zero width / undersized
+// buffer must all return an empty vector — same contract as the
+// BGR24 / NV12 converters.
+TEST(FrameConvert, Rgba32RejectsInvalidInput) {
+  Frame bad1 = MakeSolidRgba32(4, 4, 1, 2, 3, 0);
+  bad1.format = PixelFormat::BGR24;
+  EXPECT_TRUE(Rgba32FrameToBgra(bad1).empty());
+
+  Frame bad2 = MakeSolidRgba32(0, 4, 1, 2, 3, 0);
+  EXPECT_TRUE(Rgba32FrameToBgra(bad2).empty());
+
+  Frame bad3 = MakeSolidRgba32(4, 4, 1, 2, 3, 0);
+  bad3.data.resize(bad3.data.size() / 2u);
+  EXPECT_TRUE(Rgba32FrameToBgra(bad3).empty());
 }
 
 }  // namespace

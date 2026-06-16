@@ -45,6 +45,46 @@ std::vector<uint8_t> Bgr24FrameToBgra(const Frame& f) {
   return out;
 }
 
+// RGBA32 -> BGRA pass-through. The pixel-format enum is named
+// RGBA32 (32 bits per pixel) but the byte order in our camera
+// pipeline is actually BGRA — see the long comment in
+// capture/Frame.h about the naming convention. The bytes
+// produced by CameraCapture::NV12ToBgra are already in
+// DXGI_FORMAT_B8G8R8A8 layout, which is what D2D wants, so the
+// "conversion" is a straight copy. We still validate that the
+// buffer is correctly sized (width*height*4) and copy row-by-row
+// so a non-trivial rowPitch (e.g. driver-supplied padding) is
+// honored. Alpha channel is overwritten to 255 to make the frame
+// fully opaque regardless of what the source put there — some
+// webcams leave A=0 in MFVideoFormat_RGB32, which renders
+// transparent in D2D and produces a black preview.
+std::vector<uint8_t> Rgba32FrameToBgra(const Frame& f) {
+  std::vector<uint8_t> out;
+  if (f.width == 0 || f.height == 0) return out;
+  if (f.format != PixelFormat::RGBA32) return out;
+  const size_t expected = static_cast<size_t>(f.rowPitch) *
+                          static_cast<size_t>(f.height);
+  if (f.data.size() < expected) return out;
+  out.resize(static_cast<size_t>(f.width) *
+             static_cast<size_t>(f.height) * 4u);
+  const uint8_t* src = f.data.data();
+  uint8_t* dst = out.data();
+  for (uint32_t y = 0; y < f.height; ++y) {
+    const uint8_t* row = src + static_cast<size_t>(y) * f.rowPitch;
+    uint8_t* drow = dst + static_cast<size_t>(y) * f.width * 4u;
+    for (uint32_t x = 0; x < f.width; ++x) {
+      // BGRA -> BGRA (B stays, G stays, R stays, alpha = 255).
+      // The four-line copy is clearer than memcpy here because
+      // we want to overwrite the alpha channel.
+      drow[x * 4 + 0] = row[x * 4 + 0];  // B
+      drow[x * 4 + 1] = row[x * 4 + 1];  // G
+      drow[x * 4 + 2] = row[x * 4 + 2];  // R
+      drow[x * 4 + 3] = kOpaqueAlpha;    // A forced opaque
+    }
+  }
+  return out;
+}
+
 // NV12 -> BGRA. NV12 is YUV 4:2:0 semi-planar, limited (TV/MPEG)
 // range: a `width * height` byte Y plane followed by a
 // `width * height / 2` byte UV plane interleaved as (U,V,U,V,...)
