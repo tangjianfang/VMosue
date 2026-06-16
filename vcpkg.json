@@ -9,5 +9,5 @@
     "boost-lockfree",
     "gtest"
   ],
-  "builtin-baseline": "9e3a78bf79448391654b2490573a06b1bb6085b0"
+  "builtin-baseline": "58613d018f126ccaa9dac9a02b11142cb0f4f4ea"
 }

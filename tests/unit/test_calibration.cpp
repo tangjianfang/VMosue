@@ -21,7 +21,7 @@ class CalibrationTest : public ::testing::Test {
     // suffix avoids collisions if a previous run left state behind.
     baseDir_ = std::filesystem::temp_directory_path() /
                ("vmosue_calibration_test_" +
-                std::to_string(::testing::UnitTest::GetInstance()->random_seed));
+                std::to_string(::testing::UnitTest::GetInstance()->random_seed()));
     std::error_code ec;
     std::filesystem::remove_all(baseDir_, ec);
     std::filesystem::create_directories(baseDir_, ec);

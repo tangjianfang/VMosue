@@ -90,11 +90,18 @@ void DrawLine(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush,
               float x, float y, const std::wstring& s) {
   if (!rt || !brush || s.empty()) return;
   ID2D1GdiInteropRenderTarget* interop = nullptr;
-  if (FAILED(rt->QueryInterface(&IID_ID2D1GdiInteropRenderTarget,
-                                reinterpret_cast<void**>(&interop)))) {
+  // Use the templated QueryInterface(Q**) overload so the IID is
+  // derived from the destination type — this matches the SDK's
+  // expected signature (REFIID), which is reference-to-IID, not
+  // pointer-to-IID.
+  if (FAILED(rt->QueryInterface(&interop))) {
     return;
   }
-  HDC hdc = interop->GetDC(D2D1_DC_INITIALIZE_MODE_COPY);
+  HDC hdc = nullptr;
+  if (FAILED(interop->GetDC(D2D1_DC_INITIALIZE_MODE_COPY, &hdc))) {
+    interop->Release();
+    return;
+  }
   if (hdc) {
     const D2D1_COLOR_F& c = brush->GetColor();
     // Convert sRGB float to 8-bit GDI colorref. GDI uses 0x00BBGGRR

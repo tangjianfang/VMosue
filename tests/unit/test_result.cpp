@@ -12,7 +12,7 @@ TEST(Result, OkHoldsValue) {
 TEST(Result, ErrHoldsError) {
   Result<int> r = Result<int>::Err("boom");
   ASSERT_FALSE(r.isOk());
-  EXPECT_STREQ(r.error(), "boom");
+  EXPECT_STREQ(r.error().c_str(), "boom");
 }
 
 TEST(Result, ValueOnErrAborts) {

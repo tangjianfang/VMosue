@@ -5,7 +5,19 @@
 #include <string>
 #include <thread>
 #include <vector>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <atlbase.h>
+// Order matters: mfreadwrite.h assumes the base MF types (IMFAttributes,
+// IUnknown-derived COM, IMFMediaSource, ...) are already declared.
+// mfapi.h provides the runtime, mfobjects.h provides the COM base,
+// mfidl.h provides the Media Foundation IDL interfaces. Including
+// mfapi alone is not enough on the Windows 10 10.0.26100 SDK.
+#include <mfapi.h>
+#include <mfobjects.h>
+#include <mfidl.h>
 #include <mfreadwrite.h>
 #include "capture/Frame.h"
 #include "util/Result.h"

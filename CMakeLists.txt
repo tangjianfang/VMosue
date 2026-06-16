@@ -6,6 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Use wide-character (UTF-16) Windows APIs. The code passes wide string
+# literals (L"...") to APIs like CreateWindowEx / RegisterClassEx and
+# stores class names in wchar_t* constants; without these defines the
+# W-suffixed APIs are not active and the compiler errors on
+# wchar_t* -> LPCSTR conversions.
+if(WIN32)
+  add_compile_definitions(UNICODE _UNICODE)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()

@@ -35,6 +35,9 @@ vcpkg_installed/
 /check_include.bat
 /run_all.bat
 /test_*.bat
+# Local MSVC build helpers (one-off vcvars64 + cmake wrappers)
+/build-cmake.bat
+/build-ninja.bat
 
 # OS
 .DS_Store

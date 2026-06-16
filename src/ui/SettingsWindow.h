@@ -18,6 +18,9 @@
 // Threading: all public methods must be called from the main (UI)
 // thread that owns the parent HWND; the same constraint that
 // OverlayWindow and TrayIcon carry.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 namespace vmosue {

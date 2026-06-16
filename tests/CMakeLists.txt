@@ -24,6 +24,12 @@ add_executable(vmosue_tests
   unit/test_frame_resampler.cpp
   unit/test_profile_guard.cpp
   integration/test_pipeline_e2e.cpp
+  # Watchdog is a standalone utility compiled into the vmosue
+  # executable (it lives in src/app/ alongside App.cpp). Since
+  # vmosue_tests does not link to the vmosue executable, we compile
+  # Watchdog.cpp into the test binary directly so the watchdog
+  # unit tests can link against it.
+  ${CMAKE_SOURCE_DIR}/src/app/Watchdog.cpp
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util

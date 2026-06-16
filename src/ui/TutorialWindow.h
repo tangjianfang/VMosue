@@ -26,7 +26,14 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+// WC_BUTTON / WC_STATIC / etc. live in commctrl.h, not winuser.h.
+// WIN32_LEAN_AND_MEAN strips them out, so we pull commctrl.h in
+// explicitly after windows.h.
+#include <commctrl.h>
 
 #include <string>
 

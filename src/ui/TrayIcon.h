@@ -11,6 +11,9 @@
 // that owns the message-only window passed to Init. The HWND passed
 // to Init MUST outlive this object — Shutdown() does not destroy
 // that window, it only tears down the tray icon. The App owns both.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <functional>
 #include <string>
@@ -46,9 +49,14 @@ class TrayIcon {
   // the tray icon to flip its label.
   void SetPaused(bool paused);
 
- private:
-  // File-scope WndProc forwards through this pointer (set in Init).
+  // Dispatch a window message into the tray-icon handler. Exposed
+  // publicly so that an external WndProc (registered on the App's
+  // message-only window) can forward tray-icon notifications into
+  // this object. Safe to call from any thread — the implementation
+  // synchronises with the UI thread internally.
   static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+
+ private:
   void ShowContextMenu(HWND);
 
   HWND hwnd_ = nullptr;                 // message-only window owned by App

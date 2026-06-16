@@ -6,10 +6,33 @@
 #include "util/Logger.h"
 
 #include <windows.h>
+#include <string>
 
 namespace vmosue {
 
 namespace {
+
+// Convert a wide string to UTF-8 for logging. The spdlog/fmt format
+// strings in this project are narrow (char-based) and cannot accept
+// wchar_t* or std::wstring arguments, so any wide path that needs
+// to appear in a log line must go through here.
+std::string WideToUtf8(const std::wstring& w) {
+  if (w.empty()) return {};
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                                         static_cast<int>(w.size()),
+                                         nullptr, 0, nullptr, nullptr);
+  if (needed <= 0) return {};
+  std::string out(static_cast<size_t>(needed), '\0');
+  const int written = WideCharToMultiByte(
+      CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
+      out.data(), needed, nullptr, nullptr);
+  if (written != needed) out.resize(static_cast<size_t>(written));
+  return out;
+}
+
+std::string WideToUtf8(const wchar_t* w) {
+  return w ? WideToUtf8(std::wstring(w)) : std::string();
+}
 
 // Subkey under HKCU that Windows reads at user logon to populate the
 // startup items. Real name; matches the SDK header.
@@ -43,7 +66,7 @@ HKEY OpenRunKey(REGSAM access) {
                             access, &hkey);
   if (s != ERROR_SUCCESS) {
     VMOSUE_LOG_WARN("AutoStart: RegOpenKeyExW({}) failed: {}",
-                    access == KEY_READ ? L"KEY_READ" : L"KEY_WRITE",
+                    access == KEY_READ ? "KEY_READ" : "KEY_WRITE",
                     static_cast<long>(s));
     return nullptr;
   }
@@ -138,8 +161,12 @@ bool AutoStart::Enable() {
                      FormatWinError(s));
     return false;
   }
+  // VMOSUE_LOG_* uses a narrow-char format string (spdlog/fmt cannot
+  // mix narrow format spec with wide-char arguments), so convert the
+  // wide registry value name and command to UTF-8 for logging only.
   VMOSUE_LOG_INFO("AutoStart: registered HKCU\\...\\Run\\{} = {}",
-                  kValueName, command);
+                  vmosue::WideToUtf8(kValueName),
+                  vmosue::WideToUtf8(command));
   return true;
 }
 
@@ -150,7 +177,8 @@ bool AutoStart::Disable() {
   LSTATUS s = RegDeleteValueW(hkey, kValueName);
   RegCloseKey(hkey);
   if (s == ERROR_SUCCESS) {
-    VMOSUE_LOG_INFO("AutoStart: removed HKCU\\...\\Run\\{}", kValueName);
+    VMOSUE_LOG_INFO("AutoStart: removed HKCU\\...\\Run\\{}",
+                    WideToUtf8(kValueName));
     return true;
   }
   if (s == ERROR_FILE_NOT_FOUND) {

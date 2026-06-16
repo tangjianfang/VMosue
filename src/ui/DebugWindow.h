@@ -25,6 +25,9 @@
 // created on demand (when the user clicks the tray's "Debug" item)
 // and destroyed on app shutdown. Show()/Hide() are idempotent.
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d2d1.h>
 

@@ -18,6 +18,9 @@
 // is small and only adds <windows.h> to consumers that ask for
 // DisplayInfo, which is fine for a platform-layer module.
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <vector>
 
