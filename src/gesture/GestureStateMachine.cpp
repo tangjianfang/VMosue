@@ -49,6 +49,8 @@ void GestureStateMachine::Reset() {
   airClick_.Reset();
   scroll_.Reset();
   pause_.Reset();
+  twoHandOpenActive_ = false;
+  twoHandOpenStartMs_ = 0;
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
 }
@@ -99,26 +101,38 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   if (primary && other && state_.load() != GlobalState::EmergencyStopped) {
     bool bothOpen = IsHandOpen(*primary) && IsHandOpen(*other);
     if (bothOpen) {
-      if (twoHandOpenStartMs_ == 0) {
+      if (!twoHandOpenActive_) {
+        // First frame of a new gesture: stamp the start. We use a bool
+        // rather than `startMs_ == 0` to detect "not yet started"
+        // because 0 is a valid timestamp.
+        twoHandOpenActive_ = true;
         twoHandOpenStartMs_ = ts;
       } else if ((ts - twoHandOpenStartMs_) >= cfg_.twoHandOpenHoldMs) {
         VMOSUE_LOG_WARN("Two-hand-open gesture triggered EmergencyStop");
         // Drain any in-flight actions first so a consumer that polls
         // after the safeRelease sees a clean slate (the pause-toggle
-        // branch above does the same). EmergencyStop() itself also
-        // releases OS-held buttons and latches state_.
-        std::lock_guard<std::mutex> lk(actionsMu_);
-        pending_ = {};
+        // branch above does the same). Then call EmergencyStop() OUTSIDE
+        // the lock: EmergencyStop() also acquires actionsMu_, and this
+        // mutex is non-recursive, so calling it under the lock would
+        // deadlock on Windows.
+        {
+          std::lock_guard<std::mutex> lk(actionsMu_);
+          pending_ = {};
+        }
         EmergencyStop();
+        // The state is now latched -- no further gesture processing.
+        return;
       }
     } else {
       // Either hand closed (or we lost a hand) -- reset the timer so the
       // next open gesture has to wait the full hold again. This matches
       // the PauseDetector semantics.
+      twoHandOpenActive_ = false;
       twoHandOpenStartMs_ = 0;
     }
   } else {
     // One or both hands missing -- treat as broken gesture.
+    twoHandOpenActive_ = false;
     twoHandOpenStartMs_ = 0;
   }
 
@@ -159,6 +173,14 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // within this same frame.
   if (state_.load() != GlobalState::Active) return;
 
+  // Task 19: ScrollDetector consumes the "other" hand's index/middle Y
+  // motion. Returns a wheel delta (positive = scroll up). Run this
+  // BEFORE the primary-hand check so scroll still emits wheel events
+  // when only the "other" hand is visible (e.g. the user has occluded
+  // their primary hand for a moment -- we shouldn't drop scroll
+  // input on the floor just because the cursor can't move this frame).
+  int scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : 0;
+
   // Find right hand (or left, when the user is left-handed).
   const HandLandmarks* right = nullptr;
   for (const auto& h : hands) {
@@ -168,11 +190,18 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
       break;
     }
   }
-  if (!right) return;
 
-  // Task 19: ScrollDetector consumes the "other" hand's index/middle Y
-  // motion. Returns a wheel delta (positive = scroll up).
-  int scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : 0;
+  if (!right) {
+    // No primary hand: only the scroll branch produced anything.
+    // Flush the wheel delta so a downstream consumer (e.g. App) still
+    // sees the scroll input -- it would otherwise be lost until the
+    // next frame happens to have both hands.
+    if (scrollDelta != 0) {
+      std::lock_guard<std::mutex> lk(actionsMu_);
+      pending_.wheel += scrollDelta;
+    }
+    return;
+  }
 
   ActionSet local;
 

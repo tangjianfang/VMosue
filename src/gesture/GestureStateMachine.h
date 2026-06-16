@@ -61,9 +61,12 @@ class GestureStateMachine {
   std::mutex actionsMu_;
   ActionSet pending_;
   // Task 21: timestamp (ms, same clock as `ts`) at which both hands
-  // became visibly open. Zero means "not currently open". When the
-  // gesture breaks (either hand closes) we reset this back to zero so
-  // a subsequent open-hand gesture has to wait the full holdMs again.
+  // became visibly open, and a separate boolean to track whether the
+  // gesture is currently in progress. We can't use `startMs_ == 0` as
+  // the "not started" sentinel because 0 is a valid timestamp -- the
+  // first frame of a session can legitimately arrive at t=0 and we
+  // would otherwise fail to ever trip the gesture.
+  bool twoHandOpenActive_ = false;
   int64_t twoHandOpenStartMs_ = 0;
 };
 

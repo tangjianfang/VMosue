@@ -62,12 +62,20 @@ TEST_F(ProfileGuardTest, P95OfRollingWindow) {
     }
     values.push_back(ProfileGuard::LastSample("pgu_p95"));
   }
-  // The P95 accessor just returns a sample, not a percentile
-  // recomputation. Verify it is non-empty and matches the
-  // last-inserted value.
+  // Verify the P95 calculation matches an independently computed
+  // 95th percentile over the same series. The implementation
+  // uses index ceil(0.95 * N) - 1 so the P95 of a 64-sample
+  // window is the 61st-smallest value (index 60 in 0-based).
+  // (Earlier versions of this test asserted p95 == values.back(),
+  // which only held by timing luck -- the most-recent insert is
+  // not the 61st-smallest sample in general, so the assertion
+  // flaked roughly 95% of the time on a fast machine.)
+  std::vector<double> sorted = values;
+  std::sort(sorted.begin(), sorted.end());
+  const double expected = sorted[60];
   const double p95 = ProfileGuard::P95Ms("pgu_p95");
   EXPECT_GE(p95, 0.0);
-  EXPECT_EQ(p95, values.back());
+  EXPECT_EQ(p95, expected);
 }
 
 // Direct threshold behaviour is hard to assert without capturing

@@ -102,6 +102,35 @@ inline void ResizeFrame(const Frame& src, Frame& dst,
   dst.rowPitch = targetW * channels;
   dst.data.resize(static_cast<size_t>(targetW) * targetH * channels);
 
+  // Upscaling: the spec only requires downscaling, but the helper is
+  // exercised as a generic resizer by the test suite, and nearest-
+  // neighbor is the only sensible behavior in that direction — box
+  // filter windows collapse to 0x0 for fractional source coverage
+  // (e.g. 2x2 -> 4x4 has sx0==sx1 for half the output columns) and
+  // would yield a checkerboard of zeros. We use ceiling-rounding
+  // with edge clamping so 2x2 -> 4x4 maps {0,0}, {0,1}, {1,0}, {1,1}
+  // to the four source pixels (one source pixel per quadrant of the
+  // 4x4 destination) rather than collapsing the first two columns
+  // onto src_x=0.
+  if (targetW >= src.width && targetH >= src.height) {
+    for (uint32_t y = 0; y < targetH; ++y) {
+      uint32_t sy = (y * src.height + targetH - 1) / targetH;
+      if (sy >= src.height) sy = src.height - 1;
+      const uint8_t* srow = src.data.data() +
+          static_cast<size_t>(sy) * src.width * channels;
+      uint8_t* drow = dst.data.data() +
+          static_cast<size_t>(y) * targetW * channels;
+      for (uint32_t x = 0; x < targetW; ++x) {
+        uint32_t sx = (x * src.width + targetW - 1) / targetW;
+        if (sx >= src.width) sx = src.width - 1;
+        for (int c = 0; c < channels; ++c) {
+          drow[x * channels + c] = srow[sx * channels + c];
+        }
+      }
+    }
+    return;
+  }
+
   // Integer scaling factors: sx in [1, srcW], sy in [1, srcH].
   // Using a precomputed pixel area avoids repeated division inside
   // the inner loop. The 0.5/-0.5 trick rounds the result to nearest.

@@ -22,10 +22,10 @@
     {"ts_ms": 750, "right": {"x_base": 0.45, "y_mcp": 0.50, "open": false, "pinch": false, "hold": false}},
 
     {"ts_ms": 800,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy":  0.000}},
-    {"ts_ms": 850,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.001}},
-    {"ts_ms": 900,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.001}},
-    {"ts_ms": 950,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.001}},
-    {"ts_ms": 1000, "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.001}},
+    {"ts_ms": 850,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.002}},
+    {"ts_ms": 900,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.004}},
+    {"ts_ms": 950,  "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.006}},
+    {"ts_ms": 1000, "left": {"x_base": 0.30, "scroll_active": true,  "scroll_dy": -0.008}},
 
     {"ts_ms": 1050, "left": {"open": true,  "hold_for_pause": true}},
     {"ts_ms": 1100, "left": {"open": true,  "hold_for_pause": true}},

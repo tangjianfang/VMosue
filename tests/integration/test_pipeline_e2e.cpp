@@ -79,12 +79,27 @@ static HandLandmarks makeRightHand(float x_base, float y_mcp,
   if (pinch) {
     // Thumb tip (4) sits at the MCP, index tip (8) is dragged toward
     // it so the distance falls under the default 0.04 pinch threshold.
-    lm.points[4] = {x_base,         y_mcp,   0.0f};
-    lm.points[8] = {x_base + 0.01f, y_mcp,   0.0f};
+    // We only override point 8 when the hand is closed (open=false) --
+    // when both open=true and pinch=true the spec wants a pinching
+    // open palm, which the test fixtures don't actually exercise but
+    // we keep the index tip "above" the MCP to stay consistent with
+    // the open branch.
+    if (!open) {
+      lm.points[4] = {x_base,         y_mcp,   0.0f};
+      lm.points[8] = {x_base + 0.01f, y_mcp,   0.0f};
+    } else {
+      lm.points[4] = {x_base,         y_mcp,   0.0f};
+    }
   } else {
-    // Spread: distance > release threshold (0.07).
+    // Spread: thumb away from index tip. Only move the thumb; do
+    // NOT override the index tip because the open/closed branch
+    // already placed it correctly. Earlier versions of this helper
+    // unconditionally re-set lm.points[8] to y_mcp in the spread
+    // branch, which collapsed the "open hand" fingertip onto the
+    // MCP and made IsHandOpen() return false (the two-hand-open
+    // emergency-stop test then failed to trip because the right
+    // hand was not recognised as open).
     lm.points[4] = {x_base - 0.10f, y_mcp,   0.0f};
-    lm.points[8] = {x_base + 0.10f, y_mcp,   0.0f};
   }
   return lm;
 }

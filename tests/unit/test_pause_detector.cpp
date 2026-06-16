@@ -52,8 +52,8 @@ TEST(PauseDetector, ResetsOnClose) {
   EXPECT_EQ(d.OnLandmarks(closedHand(), t+800), vmosue::PauseDetector::Event::None);
   // re-open at t+900: hold starts over
   EXPECT_EQ(d.OnLandmarks(openHand(), t+900), vmosue::PauseDetector::Event::None);
-  // at t+1850 (900+1000 hold), toggle
-  EXPECT_EQ(d.OnLandmarks(openHand(), t+1850), vmosue::PauseDetector::Event::PauseToggle);
+  // at t+1900 (900+1000 hold), toggle
+  EXPECT_EQ(d.OnLandmarks(openHand(), t+1900), vmosue::PauseDetector::Event::PauseToggle);
 }
 
 TEST(PauseDetector, DoesNotEmitOnClosedHand) {
