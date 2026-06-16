@@ -36,10 +36,18 @@ constexpr uint8_t kOpaqueAlpha = 0xFF;
 // the DebugWindow knows how to render. The format label returned
 // via `labelOut` is shown above the preview so the user can tell
 // at a glance whether they're looking at the real camera or a
-// placeholder. CameraCapture defaults to NV12; BGR24 is supported
-// as a fallback so a future config change to the camera format
-// still renders without a code edit.
+// placeholder. CameraCapture's current default path delivers
+// RGBA32 (BGRA bytes in memory) after NV12->BGRA conversion in
+// the capture loop; BGR24 is supported as a fallback so a future
+// config change to the camera format still renders without a
+// code edit. The raw NV12 path is also kept because offline
+// tools or future camera drivers might feed us NV12 directly
+// (e.g. a recorded stream).
 std::vector<uint8_t> FrameToBgra(const Frame& f, std::wstring& labelOut) {
+  if (f.format == PixelFormat::RGBA32) {
+    auto buf = Rgba32FrameToBgra(f);
+    if (!buf.empty()) { labelOut = L"Camera: RGBA32 live"; return buf; }
+  }
   if (f.format == PixelFormat::NV12) {
     auto buf = Nv12FrameToBgra(f);
     if (!buf.empty()) { labelOut = L"Camera: NV12 live"; return buf; }
@@ -363,7 +371,8 @@ void DebugWindow::render() {
   if (!snap.frame.empty() && snap.frame.width > 0 &&
       snap.frame.height > 0 && brushWhite_) {
     if (snap.frame.format == PixelFormat::BGR24 ||
-        snap.frame.format == PixelFormat::NV12) {
+        snap.frame.format == PixelFormat::NV12 ||
+        snap.frame.format == PixelFormat::RGBA32) {
       // v0.3: actually blit the camera frame. CameraCapture feeds
       // us NV12 by default; the BGR24 branch is a fallback for a
       // future config change. We convert to BGRA, upload to a

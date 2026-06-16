@@ -64,6 +64,11 @@ class TutorialWindow {
   // so re-opening shows the same step.
   void Hide();
 
+  // Accessor for the underlying HWND. Returns nullptr until Init
+  // has created the window (or after Shutdown). Primarily used
+  // by the App's startup diagnostics.
+  HWND GetHwnd() const { return hwnd_; }
+
   // Tear down any resources. Safe to call multiple times.
   void Shutdown();
 
