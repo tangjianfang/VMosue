@@ -32,7 +32,14 @@ void CursorController::OnLandmarks(const HandLandmarks& right, ActionSet& action
   const float dz = GetAdaptive().CursorDeadZone();
   const auto [virtW, virtH] = GetAdaptive().DesktopPixels();
 
-  float dx = (p.x - prevPivot_->x) * cfg_.sensitivityX;
+  // WebCam frames are natively mirrored (selfie convention), so the
+  // MediaPipe landmark x grows toward the user's actual right hand
+  // but the user perceives motion in the opposite direction — moving
+  // their hand to screen-left produces a decreasing landmark x, yet
+  // the cursor would drift screen-right if we just multiplied by +1.
+  // Negate dx so the cursor follows the hand as the user sees it.
+  // Y is left untouched because webcam vertical is not mirrored.
+  float dx = -(p.x - prevPivot_->x) * cfg_.sensitivityX;
   float dy = (p.y - prevPivot_->y) * cfg_.sensitivityY;
   if (std::fabs(dx) < dz) dx = 0.0f;
   if (std::fabs(dy) < dz) dy = 0.0f;
