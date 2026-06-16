@@ -145,6 +145,69 @@ struct vmosue::ChildHandles {
 
 namespace {
 
+// Locate the vmosue project root at runtime. The C++ binary is
+// normally run from the build tree (e.g. `build/bin/vmosue.exe`),
+// in which case CWD-relative paths like `scripts/hand_...` and
+// `resources/models/...` resolve to the wrong place. The original
+// v0.3 code required the user to launch from the project root
+// (a footgun: a `cd build && ./bin/vmosue.exe` invocation
+// immediately failed with "No such file"). This resolver tries
+// three strategies, in order:
+//
+//   1. CWD — works when the user runs from the project root, or
+//      when the build tree is laid out so that CWD has both
+//      `scripts/hand_detector_server.py` and
+//      `resources/models/hand_landmarker.task`.
+//   2. The directory containing vmosue.exe (one level up of the
+//      binary's path).
+//   3. Walk up from the binary's directory looking for the
+//      sentinel `scripts/hand_detector_server.py`. The
+//      `build/bin/vmosue.exe` -> `build/` -> project root layout
+//      is the common case this catches.
+//
+// Returns an absolute path with no trailing slash, or "" if no
+// candidate has the expected layout. The check is "scripts AND
+// resources both present" so we don't accidentally claim an
+// intermediate directory that has one but not the other.
+std::string ResolveProjectRoot() {
+  auto hasLayout = [](const std::string& d) -> bool {
+    auto fileExists = [](const std::string& p) -> bool {
+      DWORD attr = GetFileAttributesA(p.c_str());
+      return attr != INVALID_FILE_ATTRIBUTES &&
+             !(attr & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    return fileExists(d + "\\scripts\\hand_detector_server.py") &&
+           fileExists(d + "\\resources\\models\\hand_landmarker.task");
+  };
+
+  // (1) CWD.
+  char cwd[MAX_PATH] = {};
+  if (GetCurrentDirectoryA(sizeof(cwd), cwd) > 0) {
+    std::string d(cwd);
+    if (hasLayout(d)) return d;
+  }
+
+  // (2) The directory containing the running executable.
+  char exePath[MAX_PATH] = {};
+  if (GetModuleFileNameA(nullptr, exePath, sizeof(exePath)) > 0) {
+    std::string d(exePath);
+    auto slash = d.find_last_of("\\/");
+    if (slash != std::string::npos) d.resize(slash);
+    if (hasLayout(d)) return d;
+
+    // (3) Walk up parent directories looking for the sentinel
+    // pair. We bound the walk at 8 levels to avoid an infinite
+    // loop if the binary is somehow outside a normal tree.
+    for (int i = 0; i < 8; ++i) {
+      slash = d.find_last_of("\\/");
+      if (slash == std::string::npos) break;
+      d.resize(slash);
+      if (hasLayout(d)) return d;
+    }
+  }
+  return "";
+}
+
 // Read a single LF-terminated line from the child's stdout. Defined
 // further down in this TU (also used by SpawnPythonDetector's
 // post-handshake write probe and the per-frame Detect() call).
@@ -174,9 +237,40 @@ bool SpawnPythonDetector(const std::string& modelPath,
   // the process exits, which makes our "ready" handshake stall.
   SetEnvironmentVariableA("PYTHONUNBUFFERED", "1");
 
+  // v0.5 (bug fix): resolve the script + model paths against the
+  // project root, not CWD. Running `vmosue.exe` from the build
+  // tree (e.g. `cd build && ./bin/vmosue.exe`) put CWD at
+  // `build/`, so the bare `scripts\hand_detector_server.py`
+  // path resolved to `build\scripts\...` (does not exist) and
+  // the python child exited with "No such file" before its
+  // ready handshake. ResolveProjectRoot() finds the real root
+  // by walking up from the executable directory until it
+  // finds the `scripts/hand_detector_server.py` + `resources/
+  // models/hand_landmarker.task` pair. If we can't find a
+  // root, we fall back to the original CWD-relative behavior
+  // so the user still gets a clear "file not found" instead
+  // of a silent default.
+  std::string root = ResolveProjectRoot();
+  if (root.empty()) {
+    VMOSUE_LOG_WARN("HandDetector: could not locate project root "
+                    "(scripts/hand_detector_server.py + resources/"
+                    "models/hand_landmarker.task not found relative to "
+                    "CWD or vmosue.exe); falling back to CWD-relative");
+  } else {
+    VMOSUE_LOG_INFO("HandDetector: project root resolved to {}", root);
+  }
+  std::string scriptPath = root.empty()
+      ? std::string("scripts\\hand_detector_server.py")
+      : (root + "\\scripts\\hand_detector_server.py");
+  std::string modelFull = modelPath;
+  if (!root.empty() && (modelPath.find(':') == std::string::npos &&
+                        modelPath.find("\\\\") == std::string::npos)) {
+    modelFull = root + "\\" + modelPath;
+  }
+
   std::string cmdLine = "\"" + pythonExe +
-                        "\" -u \"scripts\\hand_detector_server.py\" "
-                        "--model \"" + modelPath + "\" "
+                        "\" -u \"" + scriptPath + "\" "
+                        "--model \"" + modelFull + "\" "
                         "--num-hands " + std::to_string(numHands) +
                         " --min-hand-confidence " +
                         std::to_string(minHandConfidence);

@@ -14,6 +14,7 @@ target_link_libraries(vmosue PRIVATE
   vmosue_ui
   vmosue_platform
   vmosue_config
+  vmosue_runtime_data
   Threads::Threads
   Boost::boost
 )

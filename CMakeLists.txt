@@ -61,3 +61,43 @@ if(VMOSUE_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
 endif()
+
+# v0.5: keep build/bin/scripts and build/bin/resources in sync with
+# the source tree on every build. The runtime HandDetector spawns
+# `python scripts/hand_detector_server.py` with the working
+# directory inherited from vmosue.exe, so the script + model
+# directories must sit next to the binary. An earlier v0.3 setup
+# relied on a one-off manual copy that went stale when the python
+# script gained new CLI arguments (the python child then failed
+# with "unrecognized arguments" even though the source-tree copy
+# was up to date). add_custom_command(OUTPUT <sentinel> POST_BUILD)
+# is the standard CMake idiom: the sentinel .stamp file is the
+# "what got built" token, and depends on the source files we want
+# copied. Whenever any of those source files are newer than the
+# stamp, CMake re-runs the copy and refreshes the stamp. We add
+# the stamp as a dependency of the vmosue executable so a stale
+# copy can never ship.
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/bin/scripts_and_resources.stamp
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/scripts
+          ${CMAKE_BINARY_DIR}/bin/scripts
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/resources
+          ${CMAKE_BINARY_DIR}/bin/resources
+  COMMAND ${CMAKE_COMMAND} -E touch
+          ${CMAKE_BINARY_DIR}/bin/scripts_and_resources.stamp
+  DEPENDS
+    ${CMAKE_SOURCE_DIR}/scripts/hand_detector_server.py
+    ${CMAKE_SOURCE_DIR}/resources/models/hand_landmarker.task
+  COMMENT "Syncing scripts/ and resources/ into build/bin"
+  VERBATIM
+)
+add_custom_target(sync_runtime_data ALL
+  DEPENDS ${CMAKE_BINARY_DIR}/bin/scripts_and_resources.stamp)
+# Bind the sync target to the main executable's build dependency
+# so incremental builds always re-check the stamp. We can't add
+# it as a direct link-time dependency (it's a custom target, not
+# a library) so we wire it through a small INTERFACE library.
+add_library(vmosue_runtime_data INTERFACE)
+add_dependencies(vmosue_runtime_data sync_runtime_data)
