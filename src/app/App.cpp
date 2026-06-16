@@ -4,6 +4,7 @@
 #include "config/Config.h"
 #include "input/InputInjector.h"
 #include "platform/Hotkey.h"
+#include "util/Adaptive.h"
 #include "util/FrameResampler.h"
 #include "util/Logger.h"
 #include "util/ProfileGuard.h"
@@ -503,6 +504,12 @@ void App::captureLoop() {
           std::chrono::duration_cast<std::chrono::microseconds>(
               now - last_tick).count();
       last_tick = now;
+      // v0.5: feed the live capture fps into the adaptive observer
+      // so the overlay render cadence and any other fps-driven
+      // tunables can adapt to the actual rate (which may be lower
+      // than the configured cap when the camera or host is slow).
+      GetSignalObserver().RecordFrameRate(
+          elapsed_us > 0 ? 1.0e6 / static_cast<double>(elapsed_us) : 0.0);
       SleepForFps(targetFps, elapsed_us);
     }
   } catch (const std::exception& e) {

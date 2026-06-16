@@ -1,5 +1,6 @@
 #include "inference/HandDetector.h"
 
+#include "util/Adaptive.h"
 #include "util/Logger.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -488,19 +489,37 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
   try {
     auto j = nlohmann::json::parse(line);
     int hand_count = j.value("hand_count", 0);
+
+    // v0.5: capture the top-2 scores BEFORE filtering so the
+    // adaptive controller's score-gap statistic stays accurate even
+    // when both detections are below floor (a phantom-heavy scene
+    // should still inform the next threshold, not be hidden).
+    float top1 = 0.0f, top2 = 0.0f;
+    {
+      const auto& hs = j.value("hands", nlohmann::json::array());
+      for (const auto& h : hs) {
+        float s = h.value("score", 0.0f);
+        if (s > top1) { top2 = top1; top1 = s; }
+        else if (s > top2) { top2 = s; }
+      }
+    }
+    GetSignalObserver().RecordScores(top1, top2);
+
+    // v0.5: phantom filter is now adaptive. The score-gap drives
+    // the floor; when the gap is large (one real hand + one phantom)
+    // the threshold drops to reject the phantom, and when both hands
+    // are genuinely detected (small gap) the threshold stays low so
+    // both pass. cfg_.minHandConfidence is no longer consulted here;
+    // it's kept only as an absolute hard floor (0.3) inside the
+    // adaptive controller.
+    float adaptiveFloor = GetAdaptive().MinHandScore();
     out.reserve(hand_count);
     for (const auto& h : j.value("hands", nlohmann::json::array())) {
       HandLandmarks hl;
       std::string hand = h.value("handedness", "Right");
       hl.handedness = (hand == "Left") ? 0 : 1;
       hl.score = h.value("score", 0.0f);
-      // Defense-in-depth filter: MediaPipe's per-hand `score` is the
-      // handedness classifier confidence (Left vs Right), not the
-      // hand-detection confidence, so a phantom hand can still
-      // sneak through with a high handedness score if the model is
-      // confidently wrong. Drop anything below cfg_.minHandConfidence
-      // so the overlay / state machine only see real detections.
-      if (hl.score < cfg_.minHandConfidence) continue;
+      if (hl.score < adaptiveFloor) continue;
       const auto& lms = h.value("landmarks", nlohmann::json::array());
       int n = std::min<int>(static_cast<int>(lms.size()),
                             HandLandmarks::kNumPoints);

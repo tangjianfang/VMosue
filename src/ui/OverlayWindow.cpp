@@ -1,6 +1,7 @@
 #include "ui/OverlayWindow.h"
 #include "ui/HandSkeleton.h"
 #include "ui/OverlayGeometry.h"
+#include "util/Adaptive.h"
 #include "util/Logger.h"
 #include <d2d1.h>
 #include <d2d1helper.h>
@@ -76,8 +77,14 @@ bool OverlayWindow::Init(HWND hwndParent) {
   running_.store(true);
   renderT_ = std::thread([this]() {
     while (running_.load()) {
+      auto t0 = std::chrono::steady_clock::now();
       Render();
-      Sleep(16);
+      auto dt = std::chrono::steady_clock::now() - t0;
+      GetSignalObserver().RecordRenderDuration(dt);
+      // v0.5: render cadence is derived from observed render cost
+      // and observed camera FPS (see AdaptiveController). Falls
+      // back to 16 ms (~60 fps) during cold-start.
+      Sleep(static_cast<DWORD>(GetAdaptive().RenderSleepMs()));
     }
   });
   return true;
@@ -109,21 +116,31 @@ void OverlayWindow::Render() {
   renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0));  // transparent
 
   if (f.hasHand) {
-    // Pick a color based on the v0.2 confidence tier. The
-    // palette is preserved from the v0.2 debug ring so users
-    // familiar with that color scheme get the same feedback
-    // signals: green=confident, yellow=marginal, red=poor,
-    // gray=paused.
+    // v0.5: feed the per-frame confidence into the rolling window
+    // so the color-tier cutoffs adapt to the observed distribution.
+    GetSignalObserver().RecordConfidence(f.confidence);
+
+    // Color tiers are percentile-adaptive: green = c > mu+sigma,
+    // yellow = mu-sigma < c <= mu+sigma, red = c < mu-sigma. Cold-
+    // start falls back to (0.8, 0.5).
+    auto cutoffs = GetAdaptive().ConfidenceCutoffs();
     D2D1_COLOR_F col;
     if (f.paused) {
       col = D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f);
-    } else if (f.confidence > 0.8f) {
+    } else if (f.confidence > cutoffs.first) {
       col = D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f);
-    } else if (f.confidence > 0.5f) {
+    } else if (f.confidence > cutoffs.second) {
       col = D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f);
     } else {
       col = D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f);
     }
+
+    // v0.5: bone width and dot radius scale with virtual-desktop
+    // width so the skeleton stays visible at 4K without
+    // overwhelming a 1080p display.
+    auto stroke = GetAdaptive().OverlayStrokeAndDot(virtW_);
+    const float boneWidth = stroke.first;
+    const float dotRadius = stroke.second;
 
     ID2D1SolidColorBrush* brush = nullptr;
     renderTarget_->CreateSolidColorBrush(col, &brush);
@@ -140,9 +157,8 @@ void OverlayWindow::Render() {
       // top so the dots are visible at every joint.
       for (const auto& bone : kHandBones) {
         renderTarget_->DrawLine(pts[bone.first], pts[bone.second],
-                                brush, 3.0f);
+                                brush, boneWidth);
       }
-      const float dotRadius = 5.0f;
       for (int i = 0; i < 21; ++i) {
         renderTarget_->DrawEllipse(
             D2D1::Ellipse(pts[i], dotRadius, dotRadius),
