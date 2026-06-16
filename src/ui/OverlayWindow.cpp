@@ -10,7 +10,37 @@ namespace vmosue {
 static const wchar_t kClassName[] = L"VMosueOverlay";
 
 LRESULT CALLBACK OverlayWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCREATE) {
+    // Thread the OverlayWindow* (passed via lpCreateParams in
+    // CreateWindowEx) into GWLP_USERDATA so later messages can
+    // recover it without a global.
+    auto* cs = reinterpret_cast<CREATESTRUCT*>(l);
+    SetWindowLongPtrW(h, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    return DefWindowProc(h, m, w, l);
+  }
   if (m == WM_NCHITTEST) return HTTRANSPARENT;  // click-through
+  if (m == WM_DISPLAYCHANGE) {
+    // Monitor configuration changed (plug, unplug, or resolution
+    // change). Re-query the four virtual-desktop metrics, resize
+    // the window to the new virtual desktop, and ask the render
+    // thread to recreate the D2D render target at the next
+    // iteration.
+    OverlayWindow* self = reinterpret_cast<OverlayWindow*>(
+        GetWindowLongPtrW(h, GWLP_USERDATA));
+    if (self) {
+      self->virtX_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
+      self->virtY_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
+      self->virtW_ = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+      self->virtH_ = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+      SetWindowPos(h, HWND_TOP,
+                   self->virtX_, self->virtY_,
+                   self->virtW_, self->virtH_,
+                   SWP_NOACTIVATE | SWP_NOZORDER);
+      self->needsResize_.store(true);
+    }
+    return 0;
+  }
   return DefWindowProc(h, m, w, l);
 }
 
@@ -33,7 +63,7 @@ bool OverlayWindow::Init(HWND hwndParent) {
       kClassName, L"", WS_POPUP,
       virtX_, virtY_, virtW_, virtH_,
       hwndParent, nullptr,
-      GetModuleHandle(nullptr), nullptr);
+      GetModuleHandle(nullptr), this);
   if (!hwnd_) return false;
   SetLayeredWindowAttributes(hwnd_, RGB(0, 0, 0), 0, LWA_COLORKEY);
   ShowWindow(hwnd_, SW_SHOW);
@@ -67,6 +97,9 @@ void OverlayWindow::Update(const Feedback& f) {
 }
 
 void OverlayWindow::Render() {
+  if (needsResize_.exchange(false)) {
+    ResizeRenderTarget();
+  }
   if (!renderTarget_) return;
   Feedback f;
   { std::lock_guard<std::mutex> lk(mu_); f = feedback_; }
