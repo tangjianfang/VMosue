@@ -327,14 +327,28 @@ int App::Run() {
                                 std::chrono::seconds(3);
   bool tutorialAutoShown = !Config::Get().Data().showTutorialOnLaunch;
 
-  // Main thread pumps messages from the tray message-only window so
-  // the tray icon callbacks can dispatch. We also use the running_
-  // flag as a "quit" signal: when Shutdown() flips it, we break out
-  // of the pump. This replaces the prior busy-wait sleep loop so the
-  // tray menu events are responsive.
+  // Main thread pumps messages for ALL top-level windows on this
+  // thread: the tray message-only window, the overlay, the debug
+  // window, the settings dialog, and the tutorial window. The
+  // second GetMessageW parameter is a window filter — passing the
+  // tray HWND here restricts the pump to that window only, which
+  // silently swallows WM_PAINT / WM_MOVE / WM_SIZE for every other
+  // top-level window we create. The visible symptom was that the
+  // DebugWindow never repainted (the cursor spun over it because the
+  // main thread was technically responsive but never serviced the
+  // paint); right-clicking the tray icon "fixed" it because
+  // TrackPopupMenu's internal modal loop pumps the entire thread
+  // queue and finally drains the backed-up WM_PAINTs. Passing
+  // nullptr here makes the pump thread-wide, which is the standard
+  // Win32 UI pump and what every other window in this app needs.
+  //
+  // We also use the running_ flag as a "quit" signal: when
+  // Shutdown() flips it, we break out of the pump. This replaces
+  // the prior busy-wait sleep loop so the tray menu events are
+  // responsive.
   MSG msg;
   while (running_.load()) {
-    BOOL got = GetMessageW(&msg, trayMsgWnd_, 0, 0);
+    BOOL got = GetMessageW(&msg, nullptr, 0, 0);
     if (got == 0 || got == -1) break;  // WM_QUIT or error
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
