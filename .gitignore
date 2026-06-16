@@ -42,3 +42,15 @@ vcpkg_installed/
 # OS
 .DS_Store
 Thumbs.db
+
+# ML model files — downloaded by the build environment, not
+# tracked in git. The official MediaPipe hand_landmarker.task
+# is fetched from storage.googleapis.com (see
+# docs/build-notes.md for the URL); the rtmpose *.onnx files
+# are research artifacts. Tracking them in git would force
+# every clone to pull ~220 MB of binaries and slow down push/
+# fetch for everyone. If you need to add a new model, drop
+# the file under resources/models/ and document the download
+# step alongside it; do not commit the .onnx / .task file.
+resources/models/*.onnx
+resources/models/*.task
