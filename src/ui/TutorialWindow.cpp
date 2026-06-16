@@ -456,6 +456,16 @@ LRESULT CALLBACK TutorialWindow::WndProc(HWND hwnd, UINT msg,
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    // Also cache the HWND on the instance here. WM_CREATE fires
+    // during CreateWindowEx, BEFORE the Init() line that assigned
+    // hwnd_ = CreateWindowEx(...) has executed, so reading
+    // self->hwnd_ inside the WM_CREATE handler returns the default-
+    // initialized nullptr. CreateControls() bails on that — no
+    // child controls ever get created and the window appears blank.
+    // The HWND parameter is reliable here, so we record it once.
+    TutorialWindow* ncSelf = reinterpret_cast<TutorialWindow*>(
+        cs->lpCreateParams);
+    if (ncSelf) ncSelf->hwnd_ = hwnd;
     return 1;
   }
   TutorialWindow* self = reinterpret_cast<TutorialWindow*>(

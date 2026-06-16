@@ -474,6 +474,14 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
     auto* cs = reinterpret_cast<CREATESTRUCTW*>(l);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                      reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+    // Same race as TutorialWindow: WM_CREATE fires during
+    // CreateWindowEx, before Init()'s `hwnd_ = CreateWindowEx(...)`
+    // assignment runs. CreateControls() bails on a null hwnd_,
+    // leaving the window blank. Cache the HWND here so it's
+    // visible to the WM_CREATE handler that follows.
+    SettingsWindow* ncSelf = reinterpret_cast<SettingsWindow*>(
+        cs->lpCreateParams);
+    if (ncSelf) ncSelf->hwnd_ = hwnd;
     return 1;
   }
   SettingsWindow* self = reinterpret_cast<SettingsWindow*>(
