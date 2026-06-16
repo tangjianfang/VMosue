@@ -3,6 +3,7 @@
 #include "capture/Frame.h"
 #include "config/Config.h"
 #include "inference/HandDetector.h"
+#include "util/FrameConvert.h"
 #include "util/Logger.h"
 
 #include <d2d1helper.h>
@@ -25,38 +26,30 @@ static DebugWindow* g_debug = nullptr;
 // BGR24 -> BGRA color constant. The D2D_BITMAP we create for the
 // camera preview uses DXGI_FORMAT_B8G8R8A8_UNORM (the canonical
 // HWND-render-target-compatible format), so we have to expand
-// BGR24 pixels to BGRA at upload time. The alpha channel is set
-// to 255 (opaque).
+// BGR24 / NV12 pixels to BGRA at upload time. The actual conversion
+// math lives in src/util/FrameConvert.{h,cpp} (so unit tests can
+// link it without d2d1); this file only does the format dispatch
+// and the D2D1 upload. Alpha channel = 255 (opaque).
 constexpr uint8_t kOpaqueAlpha = 0xFF;
 
-// Convert a single BGR24 frame to a vector of BGRA pixels sized
-// (width * height * 4). The source rowPitch is honored so a frame
-// with stride padding (which the Frame struct allows) still copies
-// the visible pixels correctly. Returns an empty vector on any
-// obviously-bad input (zero dimensions, no data, etc.).
-std::vector<uint8_t> Bgr24ToBgra(const Frame& f) {
-  std::vector<uint8_t> out;
-  if (f.width == 0 || f.height == 0) return out;
-  if (f.format != PixelFormat::BGR24) return out;
-  const size_t expected = static_cast<size_t>(f.rowPitch) *
-                          static_cast<size_t>(f.height);
-  if (f.data.size() < expected) return out;
-  out.resize(static_cast<size_t>(f.width) *
-             static_cast<size_t>(f.height) * 4u);
-  const uint8_t* src = f.data.data();
-  uint8_t* dst = out.data();
-  for (uint32_t y = 0; y < f.height; ++y) {
-    const uint8_t* row = src + static_cast<size_t>(y) * f.rowPitch;
-    uint8_t* drow = dst + static_cast<size_t>(y) * f.width * 4u;
-    for (uint32_t x = 0; x < f.width; ++x) {
-      // BGR -> BGRA (B stays, G stays, R stays, alpha = 255).
-      drow[x * 4 + 0] = row[x * 3 + 0];  // B
-      drow[x * 4 + 1] = row[x * 3 + 1];  // G
-      drow[x * 4 + 2] = row[x * 3 + 2];  // R
-      drow[x * 4 + 3] = kOpaqueAlpha;
-    }
+// Generic dispatch. Returns the BGRA pixel buffer for any format
+// the DebugWindow knows how to render. The format label returned
+// via `labelOut` is shown above the preview so the user can tell
+// at a glance whether they're looking at the real camera or a
+// placeholder. CameraCapture defaults to NV12; BGR24 is supported
+// as a fallback so a future config change to the camera format
+// still renders without a code edit.
+std::vector<uint8_t> FrameToBgra(const Frame& f, std::wstring& labelOut) {
+  if (f.format == PixelFormat::NV12) {
+    auto buf = Nv12FrameToBgra(f);
+    if (!buf.empty()) { labelOut = L"Camera: NV12 live"; return buf; }
   }
-  return out;
+  if (f.format == PixelFormat::BGR24) {
+    auto buf = Bgr24FrameToBgra(f);
+    if (!buf.empty()) { labelOut = L"Camera: BGR24 live"; return buf; }
+  }
+  labelOut = L"";
+  return {};
 }
 
 // Format a `double` to two decimals in a wide string. Used for the
@@ -369,27 +362,66 @@ void DebugWindow::render() {
   // suffices to verify the pipeline is wired.
   if (!snap.frame.empty() && snap.frame.width > 0 &&
       snap.frame.height > 0 && brushWhite_) {
-    if (snap.frame.format == PixelFormat::BGR24) {
-      // BGR24 -> BGRA buffer is built (Bgr24ToBgra) so the
-      // production rendering path is exercised; we just don't
-      // blit it via D2D in the parse-check build.
-      std::vector<uint8_t> bgra = Bgr24ToBgra(snap.frame);
-      (void)bgra;  // unused in the placeholder branch
-      std::wstring info = L"Camera: ";
-      info += std::to_wstring(snap.frame.width);
-      info += L"x";
-      info += std::to_wstring(snap.frame.height);
-      info += L" (BGR24 preview)";
-      DrawLine(renderTarget_, brushWhite_,
-               previewX + 8.0f, previewY + 8.0f, info);
+    if (snap.frame.format == PixelFormat::BGR24 ||
+        snap.frame.format == PixelFormat::NV12) {
+      // v0.3: actually blit the camera frame. CameraCapture feeds
+      // us NV12 by default; the BGR24 branch is a fallback for a
+      // future config change. We convert to BGRA, upload to a
+      // D2D1 bitmap, then DrawBitmap scales it into the preview
+      // rectangle. The bitmap is recreated each tick (10Hz) so we
+      // don't need a cache or size-change detector — the cost of
+      // ~900KB / tick at 640x360 is well within a debug window's
+      // budget.
+      std::wstring label;
+      std::vector<uint8_t> bgra = FrameToBgra(snap.frame, label);
+      bool drew = false;
+      if (!bgra.empty() && renderTarget_) {
+        D2D1_BITMAP_PROPERTIES props{};
+        props.pixelFormat = D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE);
+        props.dpiX = 96.0f;
+        props.dpiY = 96.0f;
+        ID2D1Bitmap* bmp = nullptr;
+        HRESULT hr = renderTarget_->CreateBitmap(
+            D2D1::SizeU(snap.frame.width, snap.frame.height),
+            bgra.data(),
+            static_cast<UINT32>(snap.frame.width) * 4u,
+            props, &bmp);
+        if (SUCCEEDED(hr) && bmp) {
+          D2D1_RECT_F dest = D2D1::RectF(
+              previewX, previewY,
+              previewX + static_cast<float>(kPreviewW),
+              previewY + static_cast<float>(kPreviewH));
+          renderTarget_->DrawBitmap(
+              bmp, dest, 1.0f,
+              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+              D2D1::RectF(0, 0,
+                          static_cast<float>(snap.frame.width),
+                          static_cast<float>(snap.frame.height)));
+          bmp->Release();
+          drew = true;
+        }
+      }
+      if (!drew) {
+        std::wstring info = L"Camera: ";
+        info += std::to_wstring(snap.frame.width);
+        info += L"x";
+        info += std::to_wstring(snap.frame.height);
+        info += L" (preview blit failed)";
+        DrawLine(renderTarget_, brushWhite_,
+                 previewX + 8.0f, previewY + 8.0f, info);
+      } else if (!label.empty()) {
+        DrawLine(renderTarget_, brushWhite_,
+                 previewX + 6.0f, previewY + 6.0f, label);
+      }
     } else {
-      // Unsupported pixel format (NV12 / RGBA32) — show a
-      // placeholder per the v0.2 spec.
+      // Truly unsupported format (e.g. RGBA32). Label it so the
+      // user can still tell the pipeline is alive.
       std::wstring info = L"Camera: ";
       info += std::to_wstring(snap.frame.width);
       info += L"x";
       info += std::to_wstring(snap.frame.height);
-      info += L" (format unsupported in v0.2)";
+      info += L" (format unsupported)";
       DrawLine(renderTarget_, brushWhite_,
                previewX + 8.0f, previewY + 8.0f, info);
     }
@@ -423,7 +455,9 @@ void DebugWindow::render() {
   }
 
   // ---- Right-hand side text panel (state, FPS, config, log) ----
-  const float panelX = 420.0f;
+  // panelX is just past the right edge of the preview rectangle
+  // (previewX=10 + kPreviewW=640 + 20px gutter).
+  const float panelX = 670.0f;
   float y = 12.0f;
 
   // Header: state machine state.

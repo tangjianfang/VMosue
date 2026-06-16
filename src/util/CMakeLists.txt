@@ -7,6 +7,8 @@ add_library(vmosue_util STATIC
   I18n.cpp
   FrameResampler.h
   ProfileGuard.h
+  FrameConvert.h
+  FrameConvert.cpp
 )
 target_include_directories(vmosue_util PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(vmosue_util PUBLIC spdlog::spdlog nlohmann_json::nlohmann_json)

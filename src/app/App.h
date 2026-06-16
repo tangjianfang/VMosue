@@ -121,21 +121,19 @@ class App {
                               boost::lockfree::capacity<4>>
       landmarkQ_;
 
-  // Task 29: mirror queues feeding the DebugWindow. The capture
-  // loop pushes the same Frame it pushes to frameQ_ onto
-  // debugFrameQ_; the inference loop pushes the same smoothed
-  // hand set it pushes to landmarkQ_ onto debugLandmarkQ_. The
-  // DebugWindow's update thread is the sole consumer of each. We
-  // keep these queues independent of the main pipeline so a slow
-  // debug consumer (or a hidden debug window) cannot back-pressure
-  // the production path. drop-on-full is the right policy here:
-  // a debug visualization that lags by one frame is fine, a
+  // Task 29: DebugWindow receives frames and landmarks via its own
+  // SPSC queues (DebugWindow::PushFrame / PushLandmarks). v0.3
+  // (Task 36) removed the App-side mirror queues — they were never
+  // consumed (DebugWindow's update thread reads from its own
+  // queues, not from App's), so the live preview was permanently
+  // empty. The capture and inference loops now call
+  // `debug_->PushFrame(f)` / `debug_->PushLandmarks(hands)`
+  // directly, which is a single SPSC push into the DebugWindow.
+  // The DebugWindow's queues are independent of the production
+  // path so a slow / hidden debug consumer cannot back-pressure
+  // capture or inference. drop-on-full is the right policy: a
+  // debug visualization that lags by one frame is fine, a
   // production mouse that lags is not.
-  boost::lockfree::spsc_queue<Frame, boost::lockfree::capacity<2>>
-      debugFrameQ_;
-  boost::lockfree::spsc_queue<std::vector<HandLandmarks>,
-                              boost::lockfree::capacity<4>>
-      debugLandmarkQ_;
 
   // Task 33: shared, lock-free current capture rate. The inference
   // loop downshifts to kIdleFps after `kIdleDownshiftMs` of no

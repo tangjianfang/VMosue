@@ -4,8 +4,8 @@
 // A top-level Win32 window that, when opened from the tray's "Debug"
 // menu item, shows the runtime state of the system in real time:
 //
-//   - Live camera preview (scaled-down; BGR24 frames converted to
-//     a D2D bitmap; non-BGR24 formats show a placeholder)
+//   - Live camera preview (scaled-down; NV12/BGR24 frames converted to
+//     a D2D bitmap; unsupported formats show a placeholder)
 //   - Detected hand landmarks (21 dots per hand, in normalized image
 //     coordinates, overlaid on the preview)
 //   - State machine state (Active / Paused / EmergencyStopped)
@@ -44,8 +44,15 @@
 
 #include "capture/Frame.h"
 #include "inference/HandDetector.h"
+#include "util/FrameConvert.h"  // Nv12FrameToBgra / Bgr24FrameToBgra
 
 namespace vmosue {
+
+// The pixel-format conversion helpers (Nv12FrameToBgra /
+// Bgr24FrameToBgra) live in src/util/FrameConvert.{h,cpp} so the
+// unit tests can link them without pulling in the Win32 / D2D
+// surface. Re-exported here as a convenience for callers that
+// already include this header.
 
 // A single line in the rolling action log. Stored as a wide string so
 // the D2D text render path doesn't have to do a per-frame conversion.
@@ -137,10 +144,14 @@ class DebugWindow {
 
   // ---- Window state ----
   HWND hwnd_ = nullptr;
-  static constexpr int kWindowW = 800;
-  static constexpr int kWindowH = 600;
-  static constexpr int kPreviewW = 400;
-  static constexpr int kPreviewH = 300;
+  // v0.3 (Task 36): bumped the window and preview sizes so the
+  // camera feed is large enough to actually see hand details. The
+  // preview is now 640x360 (16:9, matching the 1280x720 camera) and
+  // the right-side text panel is correspondingly wider.
+  static constexpr int kWindowW = 960;
+  static constexpr int kWindowH = 720;
+  static constexpr int kPreviewW = 640;
+  static constexpr int kPreviewH = 360;
   // Maximum number of action log lines retained.
   static constexpr size_t kMaxLogLines = 100;
   // Update cadence (Hz). 10Hz keeps CPU usage low while still feeling

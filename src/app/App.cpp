@@ -239,6 +239,16 @@ int App::Run() {
   if (!debug_->Create(trayMsgWnd_)) {
     VMOSUE_LOG_WARN("DebugWindow init failed");
     debug_.reset();
+  } else {
+    // v0.3 (Task 36): auto-show the debug window on startup. The
+    // user is iterating on hand-detection effects and needs the
+    // live camera preview visible immediately, without having to
+    // dig through the tray menu. The tray's "Debug" item still
+    // works to re-show the window after the user closes it. We
+    // push a log line so the action log inside the window itself
+    // makes the auto-open behaviour visible.
+    debug_->PushLog(L"Auto-open: debug window shown on startup");
+    debug_->Show();
   }
 
   // Task 30: build the 6-step tutorial window. Parented to the
@@ -429,13 +439,15 @@ void App::captureLoop() {
         // configured captureFps, the inference thread pulls at
         // inferenceFps, so the queue depth stays bounded.
         frameQ_.push(f);
-        // Task 29: mirror the same frame to the debug queue. The
-        // debug queue is independent of the production pipeline so
-        // a slow / hidden debug consumer cannot back-pressure the
-        // real capture -> inference path. push() is no-throw; on a
-        // full queue the frame is dropped (acceptable: the next
-        // frame will arrive in <=33ms at 30fps).
-        debugFrameQ_.push(f);
+        // v0.3 (Task 36): push the frame directly to the debug
+        // window's own SPSC queue. The previous design pushed to a
+        // mirror queue on App and expected DebugWindow to be its
+        // consumer, but DebugWindow actually has its own internal
+        // queue and never connected to App's mirror — so the
+        // preview was permanently empty. PushFrame is a single
+        // SPSC push (no-op when the window is hidden / not yet
+        // created) and does not back-pressure the capture loop.
+        if (debug_) debug_->PushFrame(f);
       }
 
       // Sleep for the remainder of the period. If the loop body
@@ -559,11 +571,15 @@ void App::inferenceLoop() {
           }
         }
 
-        // Task 29: mirror to the debug queue BEFORE the move so
-        // we have a copy to push. The state machine loop is the
-        // primary consumer of the moved-from set. The copy is
-        // cheap relative to the inference cost it shadows.
-        debugLandmarkQ_.push(hands);
+        // v0.3 (Task 36): push landmarks directly to the debug
+        // window. See the matching comment in captureLoop for why
+        // we no longer use the App-side mirror queue. PushLandmarks
+        // takes the vector by value, so it makes a copy into the
+        // DebugWindow's own SPSC; hands is still valid for the
+        // move into landmarkQ_ below. The copy is cheap relative
+        // to the inference cost and only happens on frames where
+        // a hand was actually detected.
+        if (debug_) debug_->PushLandmarks(hands);
 
         // SPSC: same drop-on-full semantics as the capture queue. We
         // move() to avoid a deep copy of the HandLandmarks arrays.
