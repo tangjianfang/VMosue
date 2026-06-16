@@ -117,25 +117,12 @@ int App::Run() {
   const PerfMode initialPerf = CurrentPerfMode();
   const auto& initialCfg = Config::Get().Data();
 
-  CameraCapture::Config ccfg;
-  ccfg.deviceIndex = static_cast<uint32_t>(
-      std::max(0, initialCfg.cameraIndex));
-  ccfg.width = 1280;
-  ccfg.height = 720;
-  ccfg.fps = static_cast<uint32_t>(std::max(1, initialPerf.captureFps));
-  if (!cam_.Init(ccfg).isOk()) {
-    VMOSUE_LOG_ERROR("Camera init failed");
-    return 1;
-  }
-
+  // HandDetector is a stub in this build (no MediaPipe linked),
+  // so its init is essentially free; we do it on the main thread
+  // for symmetry with v0.2. The moment it becomes a real model
+  // load, move it to startupT_ alongside cam_.Init().
   HandDetector::Config hcfg;
   hcfg.useGpu = initialPerf.useGpu;
-  // Task 33: pin the inference resolution. The App's inference
-  // loop will downscale the camera frame to these dimensions
-  // before calling Detect(). 640x480 is a reasonable default for
-  // hand landmarking; the spec mentions it explicitly. We seed
-  // currentFps_ to the perf-mode inference rate so the capture
-  // loop throttles correctly from the very first frame.
   hcfg.inferenceWidth = 640;
   hcfg.inferenceHeight = 480;
   if (!detector_.Init(hcfg).isOk()) {
@@ -273,26 +260,59 @@ int App::Run() {
   Hotkey::RegisterCtrlAltG([this]() { sm_.EmergencyStop(); });
   Hotkey::RegisterEsc([this]() { sm_.EmergencyStop(); }, 1000);
 
-  cam_.Start();
-  captureT_ = std::thread(&App::captureLoop, this);
-  inferenceT_ = std::thread(&App::inferenceLoop, this);
-  smT_ = std::thread(&App::stateMachineLoop, this);
+  // v0.3 (Task 37): camera + workers + watchdog all live in a
+  // single background thread. The Media Foundation SourceReader
+  // init (MFCreateDeviceSource + SetCurrentMediaType) can take
+  // 1-3 seconds on USB cameras while the driver and capture
+  // pipeline enumerate. Previously this ran on the main thread
+  // BEFORE the GetMessage loop, so the DebugWindow appeared as
+  // a white unrendered rectangle with a busy mouse cursor for
+  // the entire warmup window. Now the main thread skips past
+  // this work and enters the message pump immediately; the
+  // DebugWindow shows "Waiting for camera..." during the
+  // background init and starts rendering real frames the moment
+  // the camera delivers its first sample.
+  //
+  // We also move the worker-thread spawn + watchdog Start into
+  // this same thread so the watchdog can register the worker
+  // thread IDs while they're still valid. Heartbeat calls from
+  // the workers before Watchdog::Start() is invoked are harmless
+  // no-ops (Watchdog's Heartbeat is documented as such).
+  startupT_ = std::thread([this, initialPerf, initialCfg]() {
+    CameraCapture::Config ccfg;
+    ccfg.deviceIndex = static_cast<uint32_t>(
+        std::max(0, initialCfg.cameraIndex));
+    ccfg.width = 1280;
+    ccfg.height = 720;
+    ccfg.fps = static_cast<uint32_t>(std::max(1, initialPerf.captureFps));
+    if (!cam_.Init(ccfg).isOk()) {
+      VMOSUE_LOG_ERROR("Camera init failed");
+      return;
+    }
+    if (debug_) debug_->PushLog(L"Camera initialized (background)");
 
-  // Task 24: register each worker with the watchdog and start the
-  // health monitor. 5s timeout gives plenty of slack over the
-  // ~33ms-per-frame cadence — a thread that hasn't heartbeated for
-  // 5s is in serious trouble (blocked on I/O, deadlocked, or
-  // crashed). The callback just logs; a future task can escalate to
-  // tearing the app down on persistent timeouts.
-  auto& wd = Watchdog::Get();
-  wd.RegisterThread(captureT_.get_id(), "capture", std::chrono::seconds(5));
-  wd.RegisterThread(inferenceT_.get_id(), "inference", std::chrono::seconds(5));
-  wd.RegisterThread(smT_.get_id(), "stateMachine", std::chrono::seconds(5));
-  wd.Start([](const std::string& name) {
-    VMOSUE_LOG_WARN("Watchdog timeout: {}", name);
+    cam_.Start();
+    captureT_ = std::thread(&App::captureLoop, this);
+    inferenceT_ = std::thread(&App::inferenceLoop, this);
+    smT_ = std::thread(&App::stateMachineLoop, this);
+
+    // Task 24: register each worker with the watchdog and start
+    // the health monitor. 5s timeout gives plenty of slack over
+    // the ~33ms-per-frame cadence. The callback just logs; a
+    // future task can escalate to tearing the app down on
+    // persistent timeouts.
+    auto& wd = Watchdog::Get();
+    wd.RegisterThread(captureT_.get_id(), "capture", std::chrono::seconds(5));
+    wd.RegisterThread(inferenceT_.get_id(), "inference", std::chrono::seconds(5));
+    wd.RegisterThread(smT_.get_id(), "stateMachine", std::chrono::seconds(5));
+    wd.Start([](const std::string& name) {
+      VMOSUE_LOG_WARN("Watchdog timeout: {}", name);
+    });
+    if (debug_) debug_->PushLog(L"Worker threads + watchdog live");
   });
 
-  VMOSUE_LOG_INFO("App started. Press Ctrl+C in console to exit.");
+  VMOSUE_LOG_INFO("App started (UI up; camera init in background). "
+                  "Press Ctrl+C in console to exit.");
 
   // Task 30: if the user has AppConfig::showTutorialOnLaunch set
   // (the in-class default is `true` for a fresh install; existing
@@ -347,6 +367,17 @@ void App::Shutdown() {
   // lambdas it captured (sm_, this) and crash on the next callback.
   Hotkey::UnregisterCtrlAltG();
   Hotkey::UnregisterEsc();
+
+  // v0.3 (Task 37): join the background-init thread FIRST. It may
+  // still be running if the user clicks Exit during the camera
+  // warmup window; if it is, the join blocks until the MF init
+  // finishes (or fails) and the worker threads are spawned (or
+  // not). After this point, captureT_/inferenceT_/smT_ are
+  // either valid threads (camera init succeeded) or not joinable
+  // (camera init failed), and the watchdog is either started or
+  // not. The two subsequent join blocks are guarded by joinable()
+  // so they handle both cases.
+  if (startupT_.joinable()) startupT_.join();
 
   if (captureT_.joinable()) captureT_.join();
   if (inferenceT_.joinable()) inferenceT_.join();

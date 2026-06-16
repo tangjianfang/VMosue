@@ -76,6 +76,16 @@ class App {
   std::thread captureT_;
   std::thread inferenceT_;
   std::thread smT_;
+  // v0.3 (Task 37): background-init thread. Media Foundation
+  // camera init (MFCreateDeviceSource + SetCurrentMediaType) can
+  // take 1-3 seconds on USB cameras while the driver and capture
+  // pipeline enumerate and negotiate. Previously this ran on the
+  // main thread BEFORE the GetMessage loop, so the DebugWindow
+  // appeared as a white unrendered rectangle with a busy mouse
+  // cursor for the entire warmup window. We now do the heavy
+  // init in startupT_ and let the main thread enter the message
+  // pump immediately after creating the windows.
+  std::thread startupT_;
 
   CameraCapture cam_;
   HandDetector detector_;
