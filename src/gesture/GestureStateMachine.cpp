@@ -173,13 +173,14 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // within this same frame.
   if (state_.load() != GlobalState::Active) return;
 
-  // Task 19: ScrollDetector consumes the "other" hand's index/middle Y
-  // motion. Returns a wheel delta (positive = scroll up). Run this
-  // BEFORE the primary-hand check so scroll still emits wheel events
-  // when only the "other" hand is visible (e.g. the user has occluded
-  // their primary hand for a moment -- we shouldn't drop scroll
-  // input on the floor just because the cursor can't move this frame).
-  int scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : 0;
+  // Task 19: ScrollDetector consumes the "other" hand's index/middle
+  // Y motion. Returns a {dy, dx} wheel delta pair (positive = up /
+  // right). Run this BEFORE the primary-hand check so scroll still
+  // emits wheel events when only the "other" hand is visible (e.g.
+  // the user has occluded their primary hand for a moment -- we
+  // shouldn't drop scroll input on the floor just because the
+  // cursor can't move this frame).
+  ScrollDelta scrollDelta = other ? scroll_.OnLandmarks(*other, ts) : ScrollDelta{};
 
   // Find right hand (or left, when the user is left-handed).
   const HandLandmarks* right = nullptr;
@@ -193,12 +194,13 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
 
   if (!right) {
     // No primary hand: only the scroll branch produced anything.
-    // Flush the wheel delta so a downstream consumer (e.g. App) still
-    // sees the scroll input -- it would otherwise be lost until the
-    // next frame happens to have both hands.
-    if (scrollDelta != 0) {
+    // Flush the wheel deltas so a downstream consumer (e.g. App)
+    // still sees the scroll input -- it would otherwise be lost
+    // until the next frame happens to have both hands.
+    if (scrollDelta.dy != 0 || scrollDelta.dx != 0) {
       std::lock_guard<std::mutex> lk(actionsMu_);
-      pending_.wheel += scrollDelta;
+      pending_.wheel  += scrollDelta.dy;
+      pending_.hWheel += scrollDelta.dx;
     }
     return;
   }
@@ -219,18 +221,21 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
     case ClickEvent::LeftUp:          local.leftUp = true; break;          // legacy fallback (shouldn't fire)
     case ClickEvent::LeftDragStart:   local.leftDown = true; break;        // DragStart maps to LMB down
     case ClickEvent::LeftDragEnd:     local.leftUp = true; break;          // DragEnd maps to LMB up
+    case ClickEvent::MiddleClick:     local.middleClick = true; break;    // thumb-middle pinch
     default: break;
   }
   if (airClick_.OnLandmarks(*right, ts) == AirClickEvent::RightClick) {
     local.rightClick = true;
   }
   if (local.leftClick || local.leftDown || local.leftUp ||
-      local.leftDoubleClick || local.rightClick || local.safeRelease ||
+      local.leftDoubleClick || local.rightClick || local.middleClick ||
+      local.safeRelease ||
       local.cursorDx != 0 || local.cursorDy != 0) {
-    VMOSUE_LOG_DEBUG("Actions: dx={} dy={} click={} dbl={} down={} up={} right={}",
+    VMOSUE_LOG_DEBUG("Actions: dx={} dy={} click={} dbl={} down={} up={} "
+                     "right={} middle={}",
         local.cursorDx, local.cursorDy,
         local.leftClick, local.leftDoubleClick, local.leftDown, local.leftUp,
-        local.rightClick);
+        local.rightClick, local.middleClick);
   }
   std::lock_guard<std::mutex> lk(actionsMu_);
   // Cursor deltas are merged additively across frames; the consumer drains
@@ -238,12 +243,14 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // the consumer polls slower than the camera frame rate.
   pending_.cursorDx += local.cursorDx;
   pending_.cursorDy += local.cursorDy;
-  pending_.wheel += scrollDelta;
+  pending_.wheel  += scrollDelta.dy;
+  pending_.hWheel += scrollDelta.dx;
   if (local.leftClick)       pending_.leftClick = true;
   if (local.leftDoubleClick) pending_.leftDoubleClick = true;
   if (local.leftDown)        pending_.leftDown = true;
   if (local.leftUp)          pending_.leftUp = true;
   if (local.rightClick)      pending_.rightClick = true;
+  if (local.middleClick)     pending_.middleClick = true;
   if (local.safeRelease)     pending_.safeRelease = true;
 }
 

@@ -763,6 +763,7 @@ void App::stateMachineLoop() {
         if (acts.leftDown) inj.LeftDown();
         if (acts.leftUp)   inj.LeftUp();
         if (acts.rightClick) inj.RightClick();
+        if (acts.middleClick) inj.MiddleClick();
 
         // Spec bug fix #1: the state machine publishes cursor deltas
         // (cursorDx, cursorDy) and the original spec consumed them
@@ -777,6 +778,9 @@ void App::stateMachineLoop() {
         if (acts.wheel != 0) {
           inj.Wheel(acts.wheel);
         }
+        if (acts.hWheel != 0) {
+          inj.HWheel(acts.hWheel);
+        }
 
         // Task 29: publish a one-line summary of the action set to
         // the debug window's action log. We only push the "interesting"
@@ -785,18 +789,21 @@ void App::stateMachineLoop() {
         // at 30Hz. Format mirrors the action log convention.
         if (debug_ && (acts.leftClick || acts.leftDoubleClick ||
                        acts.leftDown || acts.leftUp || acts.rightClick ||
+                       acts.middleClick ||
                        acts.cursorDx != 0 || acts.cursorDy != 0 ||
-                       acts.wheel != 0 || acts.safeRelease)) {
-          wchar_t buf[128];
+                       acts.wheel != 0 || acts.hWheel != 0 ||
+                       acts.safeRelease)) {
+          wchar_t buf[160];
           swprintf_s(buf,
-              L"sm: click=%d dclick=%d down=%d up=%d rclick=%d "
-              L"dx=%d dy=%d wheel=%d",
+              L"sm: click=%d dclick=%d down=%d up=%d rclick=%d mclick=%d "
+              L"dx=%d dy=%d wheel=%d hwheel=%d",
               acts.leftClick ? 1 : 0,
               acts.leftDoubleClick ? 1 : 0,
               acts.leftDown ? 1 : 0,
               acts.leftUp ? 1 : 0,
               acts.rightClick ? 1 : 0,
-              acts.cursorDx, acts.cursorDy, acts.wheel);
+              acts.middleClick ? 1 : 0,
+              acts.cursorDx, acts.cursorDy, acts.wheel, acts.hWheel);
           debug_->PushLog(buf);
         }
       } else {

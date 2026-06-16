@@ -61,9 +61,20 @@ class InputInjector {
   // down + up unconditionally.
   void RightClick();
 
+  // Middle-click is a discrete gesture (no state tracking) so we
+  // emit down + up unconditionally, mirroring RightClick(). Uses
+  // MOUSEEVENTF_MIDDLEDOWN / MIDDLEUP so middle-click-aware apps
+  // (browsers, tab managers, file managers) get the right event.
+  void MiddleClick();
+
   // Vertical scroll. Positive delta scrolls away from the user (Windows
   // convention: WHEEL_DELTA = 120 is one notch).
   void Wheel(int delta);
+
+  // Horizontal scroll. Positive delta scrolls right (matches
+  // MOUSEEVENTF_HWHEEL's positive = right convention). A no-op
+  // when delta is zero so we don't issue spurious SendInput calls.
+  void HWheel(int delta);
 
   // Unconditionally release any logically-held buttons and any modifier
   // keys (shift, ctrl, alt) we may have left behind. Safe to call from

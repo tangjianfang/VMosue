@@ -11,6 +11,8 @@ void ClickDetector::Reset() {
   lastClickMs_.reset();
   pendingSingleClick_ = false;
   pendingSingleClickStartMs_ = 0;
+  middlePhase_ = MiddlePhase::Idle;
+  middlePinchStartMs_ = 0;
 }
 
 static float dist2D(const Point2F& a, const Point2F& b) {
@@ -19,9 +21,12 @@ static float dist2D(const Point2F& a, const Point2F& b) {
 }
 
 ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
-  if (right.points.size() < 9) return ClickEvent::None;
-  // Thumb tip = 4, index tip = 8
+  if (right.points.size() < 13) return ClickEvent::None;
+  // Thumb tip = 4, index tip = 8, middle tip = 12.
+  // We need at least 13 points to read middle (12) for the middle-click
+  // gesture, even though the left-click gesture only needs 9.
   float d = dist2D(right.points[4], right.points[8]);
+  float dm = dist2D(right.points[4], right.points[12]);
 
   // v0.5: feed the distance into the adaptive observer (it
   // tracks the rolling min/max). The thresholds below come from
@@ -29,6 +34,12 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
   // min/max range and the v0.4 default. During cold start the
   // default thresholds (0.04 / 0.07) apply, so behavior is
   // identical to v0.4 for the first ~1 s.
+  //
+  // We record only the thumb-index distance. The thumb-middle
+  // distance tracks the same physical "fingers touch" semantic
+  // so it would just bias the rolling min/max with a redundant
+  // signal — the adaptive scheme is already finger-pair
+  // agnostic.
   GetSignalObserver().RecordClickDistance(d);
   const float pinch = GetAdaptive().PinchThreshold();
   const float release = GetAdaptive().ReleaseThreshold();
@@ -84,6 +95,29 @@ ClickEvent ClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
         phase_ = Phase::Idle;
       }
       break;
+  }
+
+  // Middle-click state machine (thumb-middle pinch). Runs after
+  // the left-click branch so a left-click in this same frame wins
+  // (priority). The two state machines are otherwise independent,
+  // which means the user can interleave: a quick thumb-index pinch
+  // followed by a thumb-middle pinch produces LeftClick + MiddleClick
+  // across consecutive frames.
+  if (ev == ClickEvent::None) {
+    switch (middlePhase_) {
+      case MiddlePhase::Idle:
+        if (dm < pinch) {
+          middlePhase_ = MiddlePhase::Pinching;
+          middlePinchStartMs_ = ts;
+        }
+        break;
+      case MiddlePhase::Pinching:
+        if (dm > release) {
+          ev = ClickEvent::MiddleClick;
+          middlePhase_ = MiddlePhase::Idle;
+        }
+        break;
+    }
   }
   return ev;
 }

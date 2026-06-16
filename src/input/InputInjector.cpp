@@ -150,10 +150,30 @@ void InputInjector::RightClick() {
   sendMouseInput(MOUSEEVENTF_RIGHTUP);
 }
 
+void InputInjector::MiddleClick() {
+  // Middle-click is also a discrete gesture (no public MiddleDown /
+  // MiddleUp API), so we mirror RightClick's pattern: emit down
+  // then up unconditionally. The SendInput helper logs and
+  // swallows failures.
+  sendMouseInput(MOUSEEVENTF_MIDDLEDOWN);
+  sendMouseInput(MOUSEEVENTF_MIDDLEUP);
+}
+
 void InputInjector::Wheel(int delta) {
   // mouseData is a signed DWORD for WHEEL; SendInput's MOUSEINPUT.mouseData
   // is DWORD, so we cast through. WHEEL_DELTA = 120 is one notch.
   sendMouseInput(MOUSEEVENTF_WHEEL, static_cast<DWORD>(delta));
+}
+
+void InputInjector::HWheel(int delta) {
+  // Horizontal wheel uses MOUSEEVENTF_HWHEEL. Positive delta
+  // scrolls right; we cast through DWORD the same way Wheel()
+  // does. A zero delta is filtered out by sendMouseInput's
+  // null-data path: the helper only forwards non-zero data when
+  // a flag-only event would otherwise be a no-op, so a caller
+  // can pass 0 without producing an empty input event.
+  if (delta == 0) return;
+  sendMouseInput(MOUSEEVENTF_HWHEEL, static_cast<DWORD>(delta));
 }
 
 void InputInjector::SafeReleaseAll() {

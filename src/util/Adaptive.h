@@ -337,6 +337,31 @@ class SignalObserver {
     return framesObserved_;
   }
 
+  // Reset all rolling buffers and counters to a cold state. Used
+  // by tests that need to assert against the cold-start default
+  // (or against a clean adaptive state) without being affected by
+  // observations recorded in earlier tests. Calling this on a
+  // production observer would be a real foot-gun (every adaptive
+  // value reverts to fallback for the next 1+ seconds), so it
+  // lives behind the same mutex as the accessors and is intended
+  // for the test layer only.
+  void Reset() {
+    std::lock_guard<std::mutex> lk(mu_);
+    framesObserved_ = 0;
+    top1Idx_ = top2Idx_ = -1;
+    confIdx_ = -1;
+    confMin_ = 1.0; confMax_ = 0.0;
+    renderMsIdx_ = -1;
+    lastFps_ = 30.0;
+    lmdxIdx_ = lmdyIdx_ = -1;
+    curdxIdx_ = curdyIdx_ = -1;
+    zIdx_ = -1;
+    clickDistIdx_ = scrollDistIdx_ = -1;
+    // Keep virtW_/virtH_ as-is: those are read from the OS once
+    // and don't drift, so resetting them would just cause a
+    // one-frame "no virtual desktop recorded" state.
+  }
+
  private:
   mutable std::mutex mu_;
   int framesObserved_ = 0;

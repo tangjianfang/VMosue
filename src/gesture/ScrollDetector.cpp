@@ -5,11 +5,21 @@
 namespace vmosue {
 
 void ScrollDetector::SetConfig(const Config& c) { cfg_ = c; }
-void ScrollDetector::Reset() { phase_ = Phase::Idle; phaseStartMs_ = 0; }
+void ScrollDetector::Reset() {
+  phase_ = Phase::Idle;
+  phaseStartMs_ = 0;
+  lastMidX_ = 0.0f;
+  lastMidY_ = 0.0f;
+}
 
-int ScrollDetector::OnLandmarks(const HandLandmarks& left, int64_t ts) {
-  if (left.points.size() < 13) return 0;
-  // Index tip = 8, middle tip = 12
+ScrollDelta ScrollDetector::OnLandmarks(const HandLandmarks& left, int64_t ts) {
+  if (left.points.size() < 13) return {};
+  // Index tip = 8, middle tip = 12. We track the midpoint so
+  // slow separation between the two fingers (which moves each
+  // landmark a few pixels toward the other) cancels out: the
+  // midpoint is stable as long as the hand as a whole is still.
+  const float midX = 0.5f * (left.points[8].x + left.points[12].x);
+  const float midY = 0.5f * (left.points[8].y + left.points[12].y);
   float d = std::fabs(left.points[8].y - left.points[12].y);
 
   // v0.5: record the distance (min/max histogram for the
@@ -23,13 +33,14 @@ int ScrollDetector::OnLandmarks(const HandLandmarks& left, int64_t ts) {
   const float exit  = GetAdaptive().ScrollExitThreshold();
   const float scale = GetAdaptive().ScrollScaleFactor();
 
-  int delta = 0;
+  ScrollDelta delta;
   switch (phase_) {
     case Phase::Idle:
       if (d < enter) {
         phase_ = Phase::Active;
         phaseStartMs_ = ts;
-        lastIndexY_ = left.points[8].y;
+        lastMidX_ = midX;
+        lastMidY_ = midY;
       }
       break;
     case Phase::Active:
@@ -40,11 +51,19 @@ int ScrollDetector::OnLandmarks(const HandLandmarks& left, int64_t ts) {
       if ((ts - phaseStartMs_) < cfg_.enterHoldMs) {
         // Hold not yet complete: don't emit, but keep tracking so we don't
         // treat the post-hold frame as a sudden jump of (holdStartY -> nowY).
-        lastIndexY_ = left.points[8].y;
+        lastMidX_ = midX;
+        lastMidY_ = midY;
         break;
       }
-      delta = static_cast<int>((lastIndexY_ - left.points[8].y) * scale);
-      lastIndexY_ = left.points[8].y;
+      // Sign convention matches MOUSEEVENTF_WHEEL /
+      // MOUSEEVENTF_HWHEEL: positive dy = up (hand moved up,
+      // landmark y decreased), positive dx = right (hand moved
+      // right, landmark x increased). So dy = (last - now)
+      // while dx = (now - last) — the two signs flip.
+      delta.dy = static_cast<int>((lastMidY_ - midY) * scale);
+      delta.dx = static_cast<int>((midX - lastMidX_) * scale);
+      lastMidX_ = midX;
+      lastMidY_ = midY;
       break;
   }
   return delta;

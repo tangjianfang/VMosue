@@ -20,7 +20,9 @@ struct ActionSet {
   bool leftClick = false, leftDoubleClick = false;
   bool leftDown = false, leftUp = false;
   bool rightClick = false;
-  int wheel = 0;
+  bool middleClick = false;
+  int wheel = 0;       // vertical wheel delta (positive = up)
+  int hWheel = 0;      // horizontal wheel delta (positive = right)
   bool safeRelease = false;
 };
 

@@ -28,6 +28,29 @@
 #include <vector>
 
 #include "gesture/GestureStateMachine.h"
+#include "util/Adaptive.h"
+
+// The integration tests assert absolute behavior of the
+// adaptive controller (e.g. "the wheel delta is non-zero when
+// the fixture has scroll motion"). Earlier test suites
+// (test_adaptive, test_scroll_detector) populate the global
+// SignalObserver's rolling buffers with their own observations,
+// which leaks across test boundaries. Without a reset, by the
+// time the integration tests run, the adaptive ScrollEnterThreshold
+// has been pushed above the fixture's small (0.008) fingertip
+// separation and the detector never enters the Active phase.
+//
+// Resetting in SetUp() restores the cold-start state for every
+// integration test, matching the documented "first ~1 s of real
+// use" semantics the fixture is designed to model. The fixture
+// is also a safe place to do it because all tests in this TU
+// share the same observer singleton -- doing it per TEST rather
+// than once at file scope matches gtest's per-test isolation
+// model.
+class PipelineE2E : public ::testing::Test {
+ protected:
+  void SetUp() override { vmosue::GetSignalObserver().Reset(); }
+};
 
 // Two-level stringification so we can turn a CMake-provided macro
 // like VMOSUE_TEST_FIXTURES_DIR (which expands to a bare path) into
@@ -238,11 +261,13 @@ static vmosue::ActionSet runFrames(GestureStateMachine& sm,
     merged.cursorDx        += drained.cursorDx;
     merged.cursorDy        += drained.cursorDy;
     merged.wheel           += drained.wheel;
+    merged.hWheel          += drained.hWheel;
     merged.leftClick        = merged.leftClick        || drained.leftClick;
     merged.leftDoubleClick  = merged.leftDoubleClick  || drained.leftDoubleClick;
     merged.leftDown         = merged.leftDown         || drained.leftDown;
     merged.leftUp           = merged.leftUp           || drained.leftUp;
     merged.rightClick       = merged.rightClick       || drained.rightClick;
+    merged.middleClick      = merged.middleClick      || drained.middleClick;
     merged.safeRelease      = merged.safeRelease      || drained.safeRelease;
     prevTs = f.ts_ms;
   }
@@ -285,14 +310,14 @@ static std::string locateFixture() {
 
 // ---- The actual gtest cases ----
 
-TEST(PipelineE2E, FixtureFileLoads) {
+TEST_F(PipelineE2E, FixtureFileLoads) {
   auto frames = loadFixture(locateFixture());
   // 30 frames per spec; if the fixture is malformed we want a hard
   // failure here rather than 30 silent skips downstream.
   EXPECT_EQ(frames.size(), size_t{30});
 }
 
-TEST(PipelineE2E, CursorMovesDuringFrames0Through4) {
+TEST_F(PipelineE2E, CursorMovesDuringFrames0Through4) {
   GestureStateMachine sm;
   GestureStateMachine::Config cfg;
   // The click hold is short for the cursor phase so a pinch never
@@ -310,7 +335,7 @@ TEST(PipelineE2E, CursorMovesDuringFrames0Through4) {
       << "Cursor phase must not emit any clicks.";
 }
 
-TEST(PipelineE2E, ClickFiresDuringFrames5Through8) {
+TEST_F(PipelineE2E, ClickFiresDuringFrames5Through8) {
   GestureStateMachine sm;
   sm.Init({});
   auto frames = loadFixture(locateFixture());
@@ -324,7 +349,7 @@ TEST(PipelineE2E, ClickFiresDuringFrames5Through8) {
   EXPECT_FALSE(actions.leftDown);
 }
 
-TEST(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
+TEST_F(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
   GestureStateMachine sm;
   sm.Init({});
   auto frames = loadFixture(locateFixture());
@@ -345,7 +370,7 @@ TEST(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
   EXPECT_FALSE(actions.leftClick);
 }
 
-TEST(PipelineE2E, ScrollFiresDuringFrames16Through20) {
+TEST_F(PipelineE2E, ScrollFiresDuringFrames16Through20) {
   GestureStateMachine sm;
   // PauseDetector hold is long enough that the open-palm pause phase
   // doesn't fire spuriously during scroll.
@@ -361,7 +386,7 @@ TEST(PipelineE2E, ScrollFiresDuringFrames16Through20) {
          "motion while index+middle tips were pinched together.";
 }
 
-TEST(PipelineE2E, PauseTogglesDuringFrames21Through25) {
+TEST_F(PipelineE2E, PauseTogglesDuringFrames21Through25) {
   GestureStateMachine sm;
   // Lower pause holdMs so the test stays fast; the fixture holds the
   // open palm for ~250ms in this phase.
@@ -378,7 +403,7 @@ TEST(PipelineE2E, PauseTogglesDuringFrames21Through25) {
          "the global state from Active to Paused.";
 }
 
-TEST(PipelineE2E, EmergencyStopDuringFrames26Through29) {
+TEST_F(PipelineE2E, EmergencyStopDuringFrames26Through29) {
   GestureStateMachine sm;
   GestureStateMachine::Config cfg;
   cfg.twoHandOpenHoldMs = 150;  // 4 frames * 50ms = 200ms held
@@ -396,7 +421,7 @@ TEST(PipelineE2E, EmergencyStopDuringFrames26Through29) {
          "downstream consumer (overlay, input layer).";
 }
 
-TEST(PipelineE2E, FullSequenceProducesAllExpectedEvents) {
+TEST_F(PipelineE2E, FullSequenceProducesAllExpectedEvents) {
   GestureStateMachine sm;
   GestureStateMachine::Config cfg;
   // Use tighter thresholds to match the fixture timings (50ms/frame).

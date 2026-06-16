@@ -12,6 +12,12 @@ enum class ClickEvent {
   LeftUp,
   LeftDragStart,
   LeftDragEnd,
+  // Thumb-middle pinch (right hand, landmarks 4 and 12). The
+  // left-click and middle-click state machines run in parallel;
+  // when both fire on the same frame, left wins (priority order
+  // matches how muscle memory typically resolves the two — the
+  // index finger is "first" in a pinch sequence).
+  MiddleClick,
 };
 
 class ClickDetector {
@@ -46,6 +52,17 @@ class ClickDetector {
   // a LeftDoubleClick is emitted instead.
   bool pendingSingleClick_ = false;
   int64_t pendingSingleClickStartMs_ = 0;
+
+  // Middle-click state machine (thumb-middle pinch, landmarks 4 and
+  // 12). Middle-click is rare in normal use, so we keep this
+  // deliberately simple: no double-click, no drag — just Idle ->
+  // Pinching on threshold cross, emit MiddleClick on release. Reuses
+  // the same pinch / release thresholds the left-click state
+  // machine uses (the physical "fingers touch" semantic is
+  // identical).
+  enum class MiddlePhase { Idle, Pinching };
+  MiddlePhase middlePhase_ = MiddlePhase::Idle;
+  int64_t middlePinchStartMs_ = 0;
 };
 
 }  // namespace vmosue
