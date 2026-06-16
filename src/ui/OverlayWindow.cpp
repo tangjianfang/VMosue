@@ -101,22 +101,56 @@ void OverlayWindow::Render() {
     ResizeRenderTarget();
   }
   if (!renderTarget_) return;
+
   Feedback f;
   { std::lock_guard<std::mutex> lk(mu_); f = feedback_; }
+
   renderTarget_->BeginDraw();
   renderTarget_->Clear(D2D1::ColorF(0, 0, 0, 0));  // transparent
 
-  RECT rc; GetClientRect(hwnd_, &rc);
-  float cx = f.cursorX * rc.right, cy = f.cursorY * rc.bottom;
-  ID2D1SolidColorBrush* brush = nullptr;
-  D2D1_COLOR_F col = (f.paused) ? D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f)
-                    : (f.confidence > 0.8f ? D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f)
-                       : (f.confidence > 0.5f ? D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f)
-                          : D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f)));
-  renderTarget_->CreateSolidColorBrush(col, &brush);
-  float r = 14.0f;
-  renderTarget_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), brush, 3.0f);
-  if (brush) brush->Release();
+  if (f.hasHand) {
+    // Pick a color based on the v0.2 confidence tier. The
+    // palette is preserved from the v0.2 debug ring so users
+    // familiar with that color scheme get the same feedback
+    // signals: green=confident, yellow=marginal, red=poor,
+    // gray=paused.
+    D2D1_COLOR_F col;
+    if (f.paused) {
+      col = D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f);
+    } else if (f.confidence > 0.8f) {
+      col = D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f);
+    } else if (f.confidence > 0.5f) {
+      col = D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f);
+    } else {
+      col = D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f);
+    }
+
+    ID2D1SolidColorBrush* brush = nullptr;
+    renderTarget_->CreateSolidColorBrush(col, &brush);
+    if (brush) {
+      // Map each landmark to a virtual-desktop pixel.
+      D2D1_POINT_2F pts[21];
+      for (int i = 0; i < 21; ++i) {
+        auto sp = LandmarkToScreen(f.landmarks[i],
+                                   virtX_, virtY_, virtW_, virtH_);
+        pts[i] = D2D1::Point2F(sp.x, sp.y);
+      }
+
+      // Bones first (under the joints), then the joint dots on
+      // top so the dots are visible at every joint.
+      for (const auto& bone : kHandBones) {
+        renderTarget_->DrawLine(pts[bone.first], pts[bone.second],
+                                brush, 3.0f);
+      }
+      const float dotRadius = 5.0f;
+      for (int i = 0; i < 21; ++i) {
+        renderTarget_->DrawEllipse(
+            D2D1::Ellipse(pts[i], dotRadius, dotRadius),
+            brush, 2.0f);
+      }
+      brush->Release();
+    }
+  }
   renderTarget_->EndDraw();
 }
 
