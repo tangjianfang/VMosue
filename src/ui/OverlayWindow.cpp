@@ -1,4 +1,6 @@
 #include "ui/OverlayWindow.h"
+#include "ui/HandSkeleton.h"
+#include "ui/OverlayGeometry.h"
 #include "util/Logger.h"
 #include <d2d1.h>
 #include <d2d1helper.h>
@@ -22,11 +24,15 @@ bool OverlayWindow::Init(HWND hwndParent) {
     VMOSUE_LOG_ERROR("RegisterClass overlay failed");
     return false;
   }
-  int sw = GetSystemMetrics(SM_CXSCREEN);
-  int sh = GetSystemMetrics(SM_CYSCREEN);
+  virtX_ = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  virtY_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  virtW_ = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  virtH_ = GetSystemMetrics(SM_CYVIRTUALSCREEN);
   hwnd_ = CreateWindowEx(
       WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-      kClassName, L"", WS_POPUP, 0, 0, sw, sh, hwndParent, nullptr,
+      kClassName, L"", WS_POPUP,
+      virtX_, virtY_, virtW_, virtH_,
+      hwndParent, nullptr,
       GetModuleHandle(nullptr), nullptr);
   if (!hwnd_) return false;
   SetLayeredWindowAttributes(hwnd_, RGB(0, 0, 0), 0, LWA_COLORKEY);
@@ -79,6 +85,24 @@ void OverlayWindow::Render() {
   renderTarget_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), brush, 3.0f);
   if (brush) brush->Release();
   renderTarget_->EndDraw();
+}
+
+void OverlayWindow::ResizeRenderTarget() {
+  if (renderTarget_) {
+    renderTarget_->Release();
+    renderTarget_ = nullptr;
+  }
+  if (!d2dFactory_ || !hwnd_) return;
+  RECT rc;
+  GetClientRect(hwnd_, &rc);
+  HRESULT hr = d2dFactory_->CreateHwndRenderTarget(
+      D2D1::RenderTargetProperties(),
+      D2D1::HwndRenderTargetProperties(
+          hwnd_, D2D1::SizeU(rc.right, rc.bottom)),
+      &renderTarget_);
+  if (FAILED(hr)) {
+    VMOSUE_LOG_WARN("OverlayWindow: render target recreate failed hr=0x{:x}", hr);
+  }
 }
 
 }  // namespace vmosue
