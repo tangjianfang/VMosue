@@ -7,6 +7,7 @@
 #include <mfcaptureengine.h>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
 
 #pragma comment(lib, "mfreadwrite")
@@ -244,36 +245,59 @@ void CameraCapture::captureLoop() {
     BYTE* data = nullptr;
     DWORD length = 0;
     buffer->Lock(&data, nullptr, &length);
-    Frame f;
-    f.width = cfg_.width;
-    f.height = cfg_.height;
-    f.timestampUs = NowMicros();
-    if (cfg_.pixelFormat == PixelFormat::NV12) {
-      // NV12 → BGRA in-place conversion. The downstream inference
-      // path (HandDetector) only consumes BGRA / BGR24, so we
-      // convert here once instead of pushing the color-space math
-      // into the per-frame Detect() path.
-      f.data.resize(static_cast<size_t>(cfg_.width) *
-                    static_cast<size_t>(cfg_.height) * 4);
-      NV12ToBgra(reinterpret_cast<const uint8_t*>(data), f.data.data(),
-                 cfg_.width, cfg_.height);
-      f.format = PixelFormat::RGBA32;
-      f.rowPitch = cfg_.width * 4;
-    } else {
-      // BGR24 / RGBA32 paths: just copy the source bytes and
-      // remember the format. rowPitch is set to the natural pitch
-      // for the format.
-      f.format = cfg_.pixelFormat;
-      f.rowPitch = cfg_.width * (cfg_.pixelFormat == PixelFormat::BGR24
-                                     ? 3 : 4);
-      f.data.assign(data, data + length);
-    }
-    buffer->Unlock();
     {
+      // We write directly into latestFrame_.data under the mutex
+      // rather than building a local Frame and moving it. The
+      // reason is allocation cost: at 1280x720 BGRA the data
+      // vector is 3.6 MB, and allocating + freeing that 30 times
+      // per second turns into a non-trivial amount of malloc
+      // churn. The vector grows to its peak size on the first
+      // frame and stays there for the lifetime of the capture
+      // thread, so the steady state is zero allocs per frame.
+      //
+      // We hold frameMutex_ across NV12ToBgra(). The conversion
+      // is a few hundred microseconds at 720p; the consumer side
+      // (TryGetLatestFrame) does a fast memcpy of the header
+      // fields plus a vector copy, so blocking it for that long
+      // is fine. The alternative — copying into a local first,
+      // then locking to swap — would re-introduce the per-frame
+      // allocation we're trying to avoid.
       std::lock_guard<std::mutex> lk(frameMutex_);
-      latestFrame_ = std::move(f);
+      latestFrame_.width  = cfg_.width;
+      latestFrame_.height = cfg_.height;
+      latestFrame_.timestampUs = NowMicros();
+      if (cfg_.pixelFormat == PixelFormat::NV12) {
+        // NV12 → BGRA in-place conversion. The downstream
+        // inference path (HandDetector) only consumes BGRA /
+        // BGR24, so we convert here once instead of pushing
+        // the color-space math into the per-frame Detect()
+        // path.
+        const size_t need = static_cast<size_t>(cfg_.width) *
+                            static_cast<size_t>(cfg_.height) * 4;
+        if (latestFrame_.data.size() < need) {
+          latestFrame_.data.resize(need);
+        }
+        NV12ToBgra(reinterpret_cast<const uint8_t*>(data),
+                   latestFrame_.data.data(), cfg_.width, cfg_.height);
+        latestFrame_.format = PixelFormat::RGBA32;
+        latestFrame_.rowPitch = cfg_.width * 4;
+      } else {
+        // BGR24 / RGBA32 paths: just copy the source bytes and
+        // remember the format. rowPitch is set to the natural
+        // pitch for the format. The vector grows to the
+        // largest frame size seen and stays there.
+        const size_t need = static_cast<size_t>(length);
+        if (latestFrame_.data.size() < need) {
+          latestFrame_.data.resize(need);
+        }
+        std::memcpy(latestFrame_.data.data(), data, need);
+        latestFrame_.format = cfg_.pixelFormat;
+        latestFrame_.rowPitch = cfg_.width *
+            (cfg_.pixelFormat == PixelFormat::BGR24 ? 3 : 4);
+      }
       hasFrame_ = true;
     }
+    buffer->Unlock();
     frameCv_.notify_one();
   }
 }

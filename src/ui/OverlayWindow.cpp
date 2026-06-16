@@ -82,15 +82,32 @@ bool OverlayWindow::Init(HWND hwndParent) {
       &renderTarget_);
   running_.store(true);
   renderT_ = std::thread([this]() {
+    // v0.5 perf: instead of polling on Sleep, wait on a
+    // condition variable that Update() signals. The wait_for
+    // timeout still caps the maximum render rate (== the
+    // adaptive RenderSleepMs) so we don't paint faster than
+    // the camera produces frames. Without the CV, a hand motion
+    // arriving just after a Sleep could wait up to one full
+    // RenderSleepMs before the next render -- with the CV, the
+    // wait returns as soon as Update() signals (microseconds).
+    std::unique_lock<std::mutex> lk(renderMu_);
     while (running_.load()) {
       auto t0 = std::chrono::steady_clock::now();
+      lk.unlock();
       Render();
+      lk.lock();
       auto dt = std::chrono::steady_clock::now() - t0;
       GetSignalObserver().RecordRenderDuration(dt);
-      // v0.5: render cadence is derived from observed render cost
-      // and observed camera FPS (see AdaptiveController). Falls
-      // back to 16 ms (~60 fps) during cold-start.
-      Sleep(static_cast<DWORD>(GetAdaptive().RenderSleepMs()));
+      int sleepMs = static_cast<int>(GetAdaptive().RenderSleepMs());
+      // The predicate is checked before the wait and on every
+      // notify, so a dirty_ set by Update() between renders
+      // wakes us immediately. The timeout keeps the adaptive
+      // rate cap in effect.
+      renderCv_.wait_for(lk, std::chrono::milliseconds(sleepMs),
+                         [this] { return !running_.load() || dirty_; });
+      // The wait consumed the dirty flag; clear it so the next
+      // wait can block until the next Update().
+      dirty_ = false;
     }
   });
   return true;
@@ -98,15 +115,63 @@ bool OverlayWindow::Init(HWND hwndParent) {
 
 void OverlayWindow::Shutdown() {
   if (!running_.exchange(false)) return;
+  // v0.5 perf: signal the render thread to wake and see
+  // running_=false. Without the notify, a render thread
+  // sleeping in wait_for would block until the next timeout
+  // (up to RenderSleepMs = 16-100ms), delaying shutdown.
+  renderCv_.notify_all();
   if (renderT_.joinable()) renderT_.join();
+  ReleaseBrushes();
   if (renderTarget_) { renderTarget_->Release(); renderTarget_ = nullptr; }
   if (d2dFactory_) { d2dFactory_->Release(); d2dFactory_ = nullptr; }
   if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
 }
 
 void OverlayWindow::Update(const Feedback& f) {
-  std::lock_guard<std::mutex> lk(mu_);
-  feedback_ = f;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    feedback_ = f;
+  }
+  // Set the dirty flag and wake the render thread. Holding
+  // renderMu_ around the flag set keeps the order of "set
+  // feedback" -> "set dirty" preserved -- the render thread
+  // won't wake up and see dirty_=true with a stale feedback_.
+  {
+    std::lock_guard<std::mutex> lk(renderMu_);
+    dirty_ = true;
+  }
+  renderCv_.notify_one();
+}
+
+void OverlayWindow::CreateBrushes() {
+  // All four brushes are created up-front so Render() never has
+  // to hit CreateSolidColorBrush on the hot path. Colors match
+  // the previous per-frame values: gray for paused, green /
+  // yellow / red for the three confidence tiers.
+  if (!renderTarget_) return;
+  const D2D1_COLOR_F colors[] = {
+      D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f),  // Paused
+      D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f),  // Green
+      D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f),  // Yellow
+      D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f),  // Red
+  };
+  for (int i = 0; i < static_cast<int>(BrushTier::Count); ++i) {
+    if (brushes_[i]) continue;
+    ID2D1SolidColorBrush* b = nullptr;
+    HRESULT hr = renderTarget_->CreateSolidColorBrush(colors[i], &b);
+    if (FAILED(hr) || !b) {
+      VMOSUE_LOG_WARN("OverlayWindow: CreateSolidColorBrush[{}] failed "
+                      "hr=0x{:x}", i, hr);
+      continue;
+    }
+    brushes_[i] = b;
+  }
+}
+
+void OverlayWindow::ReleaseBrushes() {
+  for (auto& b : brushes_) {
+    if (b) { b->Release(); b = nullptr; }
+  }
 }
 
 void OverlayWindow::Render() {
@@ -114,6 +179,14 @@ void OverlayWindow::Render() {
     ResizeRenderTarget();
   }
   if (!renderTarget_) return;
+  // D2D brushes are bound to the render target that created
+  // them. ResizeRenderTarget() rebuilds the target, so any
+  // brushes we held become invalid; rebuild them here on the
+  // render thread. After the first valid frame, brushes_ stays
+  // populated until the next resize.
+  if (!brushes_[0]) {
+    CreateBrushes();
+  }
 
   Feedback f;
   { std::lock_guard<std::mutex> lk(mu_); f = feedback_; }
@@ -128,18 +201,20 @@ void OverlayWindow::Render() {
 
     // Color tiers are percentile-adaptive: green = c > mu+sigma,
     // yellow = mu-sigma < c <= mu+sigma, red = c < mu-sigma. Cold-
-    // start falls back to (0.8, 0.5).
+    // start falls back to (0.8, 0.5). The tier is just an index
+    // into the brush cache; no allocation, no Release per frame.
     auto cutoffs = GetAdaptive().ConfidenceCutoffs();
-    D2D1_COLOR_F col;
+    BrushTier tier;
     if (f.paused) {
-      col = D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f);
+      tier = BrushTier::Paused;
     } else if (f.confidence > cutoffs.first) {
-      col = D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f);
+      tier = BrushTier::Green;
     } else if (f.confidence > cutoffs.second) {
-      col = D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f);
+      tier = BrushTier::Yellow;
     } else {
-      col = D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f);
+      tier = BrushTier::Red;
     }
+    ID2D1SolidColorBrush* brush = brushes_[static_cast<int>(tier)];
 
     // v0.5: bone width and dot radius scale with virtual-desktop
     // width so the skeleton stays visible at 4K without
@@ -148,8 +223,6 @@ void OverlayWindow::Render() {
     const float boneWidth = stroke.first;
     const float dotRadius = stroke.second;
 
-    ID2D1SolidColorBrush* brush = nullptr;
-    renderTarget_->CreateSolidColorBrush(col, &brush);
     if (brush) {
       // Map each landmark to a virtual-desktop pixel.
       D2D1_POINT_2F pts[21];
@@ -170,13 +243,15 @@ void OverlayWindow::Render() {
             D2D1::Ellipse(pts[i], dotRadius, dotRadius),
             brush, 2.0f);
       }
-      brush->Release();
     }
   }
   renderTarget_->EndDraw();
 }
 
 void OverlayWindow::ResizeRenderTarget() {
+  // Brushes are bound to the OLD render target. Release them
+  // before the old target goes away so they don't leak.
+  ReleaseBrushes();
   if (renderTarget_) {
     renderTarget_->Release();
     renderTarget_ = nullptr;

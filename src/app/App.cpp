@@ -587,8 +587,21 @@ void App::inferenceLoop() {
           // filter tuned to the actual cadence of incoming
           // landmarks.
           const double dt = 1.0 / std::max(1, mode.inferenceFps);
-          for (auto& h : hands) {
-            smoother_.Smooth(h, dt);
+
+          // Empty-hand short-circuit. When no hand was detected,
+          // there is nothing to smooth and no wrist motion to
+          // record, so we skip the One-Euro filter loop (21 points
+          // x 3 axes = 63 filter calls per hand) and the adaptive
+          // retune. The prevRightHand_ reset still runs below so a
+          // hand re-appearing at a new location doesn't poison the
+          // first-frame delta with a huge jump. The detector call
+          // itself is not skippable: the real MediaPipe graph
+          // (when the GPU delegate lands) needs to be invoked every
+          // tick to know when a hand re-appears.
+          if (!hands.empty()) {
+            for (auto& h : hands) {
+              smoother_.Smooth(h, dt);
+            }
           }
 
           // v0.5: feed wrist motion into the adaptive observer and
@@ -623,14 +636,20 @@ void App::inferenceLoop() {
               }
             }
             prevRightHand_ = *right;
+            // Retune the smoother from the rolling noise floor
+            // only when we have a hand to feed it. Skipping the
+            // AdaptParams call during idle frames saves another
+            // 63-iteration walk through the OneEuro filter state.
+            // The smoother continues with its last-tuned parameters
+            // and re-adapts on the next hand frame.
+            auto [mc, b] = GetAdaptive().LandmarkFilterParams();
+            smoother_.AdaptParams(1.0 / dt, mc, b);
           } else {
             // No right hand this frame — clear the tracker so a
             // re-appearance at a new location doesn't poison the
             // delta with a huge first-frame jump.
             prevRightHand_.reset();
           }
-          auto [mc, b] = GetAdaptive().LandmarkFilterParams();
-          smoother_.AdaptParams(1.0 / dt, mc, b);
         }
 
         // Task 33: idle down-shift. If we got at least one
