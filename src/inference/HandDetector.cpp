@@ -94,12 +94,15 @@ Result<void> HandDetector::Init(const Config& cfg) {
   // storage.googleapis.com to fetch MediaPipe (see docs/build-notes.md),
   // so Detect() returns an empty vector until the real C API is
   // linked. Without this line the log "HandDetector initialized:"
-  // misled users into thinking hand tracking was live.
+  // misled users into thinking hand tracking was live. We log at
+  // WARN so it's hard to miss; the message says "does NOT load"
+  // explicitly because "STUB mode" was misread as "still loading".
   initialized_ = true;
   VMOSUE_LOG_WARN(
-      "HandDetector running in STUB mode (no MediaPipe linked). "
-      "Detect() will return no hands; gesture tracking is disabled. "
-      "model={}, maxHands={}",
+      "HandDetector: NO real hand tracking (MediaPipe is not "
+      "linked in this build). Detect() will return no hands; "
+      "gesture / overlay is driven only by the DebugWindow. "
+      "model path is recorded for reference: {}, maxHands={}",
       cfg_.modelPath, cfg_.maxHands);
   return Result<void>::Ok({});
 }

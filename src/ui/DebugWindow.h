@@ -180,6 +180,17 @@ class DebugWindow {
   boost::lockfree::spsc_queue<std::vector<HandLandmarks>,
                               boost::lockfree::capacity<4>>
       landmarkQ_;
+
+  // ---- Camera-warmup indicator ----
+  // Wall-clock time at which the user first saw the preview area
+  // with no frame in it. Reset to zero once the first frame
+  // arrives so the elapsed counter stops ticking. The render
+  // function shows "Waiting for camera... (Ns)" so the user can
+  // tell the app is alive during the Media Foundation warmup
+  // window (which is typically 1-3 seconds; sometimes longer
+  // for slower USB cameras).
+  std::chrono::steady_clock::time_point waitingSince_{};
+  bool hasShownFirstFrame_ = false;
 };
 
 }  // namespace vmosue

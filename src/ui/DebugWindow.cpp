@@ -426,9 +426,33 @@ void DebugWindow::render() {
                previewX + 8.0f, previewY + 8.0f, info);
     }
   } else if (brushWhite_) {
+    // The camera hasn't delivered a frame yet. This is the normal
+    // state during the Media Foundation warmup window (1-3s on a
+    // fast camera, longer on slow USB cams). Show an explicit
+    // "Waiting for camera..." message with an elapsed-seconds
+    // counter so the user can tell the app is alive — without
+    // this the static text looks like a frozen window.
+    if (waitingSince_.time_since_epoch().count() == 0) {
+      waitingSince_ = std::chrono::steady_clock::now();
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - waitingSince_).count();
+    std::wstring info = L"Waiting for camera... (";
+    info += std::to_wstring(static_cast<long>(elapsed));
+    info += L"s)";
+    DrawLine(renderTarget_, brushYellow_,  // yellow so it stands out
+             previewX + 8.0f, previewY + 8.0f, info);
+    // Add a hint line below the title so the user understands
+    // why the preview is blank. The Media Foundation
+    // SourceReader can take a few seconds to deliver its first
+    // sample; this is not a hang.
     DrawLine(renderTarget_, brushWhite_,
-             previewX + 8.0f, previewY + 8.0f,
-             L"Camera: (no frame yet)");
+             previewX + 8.0f, previewY + 28.0f,
+             L"First camera frame can take 1-3 seconds");
+  }
+  if (hasShownFirstFrame_ == false &&
+      !snap.frame.empty() && snap.frame.width > 0) {
+    hasShownFirstFrame_ = true;
   }
 
   // ---- Landmark overlay (drawn on top of the preview) ----

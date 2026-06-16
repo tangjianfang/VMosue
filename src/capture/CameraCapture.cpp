@@ -150,17 +150,52 @@ void CameraCapture::Stop() {
 }
 
 void CameraCapture::captureLoop() {
+  using clock = std::chrono::steady_clock;
+  const auto start = clock::now();
+  bool firstFrameLogged = false;
+  int noSampleStreak = 0;  // consecutive ReadSample calls with no sample
   while (running_.load()) {
     CComPtr<IMFSample> sample;
     DWORD streamFlags = 0;
     HRESULT hr = reader_->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0,
                                      nullptr, &streamFlags, nullptr, &sample);
     if (!running_.load()) break;
-    if (FAILED(hr) || !sample) {
+    if (FAILED(hr)) {
+      // True failure (e.g. device disconnected). The previous version
+      // also logged "failed" when hr was S_OK but the sample pointer
+      // was null, which flooded the log at ~100Hz during the normal
+      // MF warmup window and was misread by the user as a real
+      // error. We only log the genuinely-failed case here.
       VMOSUE_LOG_WARN("ReadSample failed: hr=0x{:x}", hr);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
+    if (!sample) {
+      // hr == S_OK but no sample yet — this is the normal
+      // Media Foundation warmup state. Many cameras take 1-3
+      // seconds (sometimes more) to deliver their first sample
+      // after the source reader is created. We back off a
+      // little each time so we don't peg a core during warmup.
+      noSampleStreak++;
+      if (noSampleStreak == 1 || noSampleStreak == 30 ||
+          noSampleStreak == 100 || (noSampleStreak % 200) == 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            clock::now() - start).count();
+        VMOSUE_LOG_INFO("Camera warmup: waiting for first sample "
+                        "(streak={}, elapsed={}ms)",
+                        noSampleStreak, static_cast<long>(elapsed));
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+    if (!firstFrameLogged) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          clock::now() - start).count();
+      VMOSUE_LOG_INFO("Camera first sample after {}ms ({} warmup polls)",
+                      static_cast<long>(elapsed), noSampleStreak);
+      firstFrameLogged = true;
+    }
+    noSampleStreak = 0;
     CComPtr<IMFMediaBuffer> buffer;
     sample->ConvertToContiguousBuffer(&buffer);
     BYTE* data = nullptr;
