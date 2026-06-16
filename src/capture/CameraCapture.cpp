@@ -18,6 +18,49 @@ namespace vmosue {
 namespace {
 constexpr int kQueueDepth = 2;
 
+// Convert an NV12 frame (Y plane then interleaved UV plane at
+// half-resolution) into BGRA bytes suitable for the inference
+// pipeline. The Y plane is `width * height` bytes; the UV plane
+// is `width * (height / 2)` bytes with U, V alternating every
+// pixel. We use BT.601 limited-range coefficients (the de-facto
+// standard for NV12 from webcams).
+//
+// The caller pre-allocates `out_bgra` with at least
+// `width * height * 4` bytes. We do NOT bounds-check inside the
+// inner loop for speed; the caller is expected to size the buffer
+// correctly.
+void NV12ToBgra(const uint8_t* nv12, uint8_t* out_bgra,
+                 uint32_t width, uint32_t height) {
+  const uint8_t* y_plane = nv12;
+  const uint8_t* uv_plane = nv12 + static_cast<size_t>(width) * height;
+  const uint32_t half_w = width / 2;
+  for (uint32_t y = 0; y < height; ++y) {
+    uint8_t* row_out = out_bgra + static_cast<size_t>(y) * width * 4;
+    const uint8_t* y_row = y_plane + static_cast<size_t>(y) * width;
+    const uint8_t* uv_row =
+        uv_plane + static_cast<size_t>(y / 2) * width;
+    for (uint32_t x = 0; x < width; ++x) {
+      const int Y = static_cast<int>(y_row[x]);
+      const int U = static_cast<int>(uv_row[(x / 2) * 2]);
+      const int V = static_cast<int>(uv_row[(x / 2) * 2 + 1]);
+      // BT.601 limited-range integer math.
+      const int C = Y - 16;
+      const int D = U - 128;
+      const int E = V - 128;
+      int R = (298 * C + 409 * E + 128) >> 8;
+      int G = (298 * C - 100 * D - 208 * E + 128) >> 8;
+      int B = (298 * C + 516 * D + 128) >> 8;
+      if (R < 0) R = 0; else if (R > 255) R = 255;
+      if (G < 0) G = 0; else if (G > 255) G = 255;
+      if (B < 0) B = 0; else if (B > 255) B = 255;
+      row_out[x * 4 + 0] = static_cast<uint8_t>(B);  // B
+      row_out[x * 4 + 1] = static_cast<uint8_t>(G);  // G
+      row_out[x * 4 + 2] = static_cast<uint8_t>(R);  // R
+      row_out[x * 4 + 3] = 255;                       // A
+    }
+  }
+}
+
 struct DeviceInfo {
   std::wstring symbolicLink;
   std::wstring name;
@@ -204,10 +247,27 @@ void CameraCapture::captureLoop() {
     Frame f;
     f.width = cfg_.width;
     f.height = cfg_.height;
-    f.format = cfg_.pixelFormat;
-    f.rowPitch = cfg_.width;  // for NV12
     f.timestampUs = NowMicros();
-    f.data.assign(data, data + length);
+    if (cfg_.pixelFormat == PixelFormat::NV12) {
+      // NV12 → BGRA in-place conversion. The downstream inference
+      // path (HandDetector) only consumes BGRA / BGR24, so we
+      // convert here once instead of pushing the color-space math
+      // into the per-frame Detect() path.
+      f.data.resize(static_cast<size_t>(cfg_.width) *
+                    static_cast<size_t>(cfg_.height) * 4);
+      NV12ToBgra(reinterpret_cast<const uint8_t*>(data), f.data.data(),
+                 cfg_.width, cfg_.height);
+      f.format = PixelFormat::RGBA32;
+      f.rowPitch = cfg_.width * 4;
+    } else {
+      // BGR24 / RGBA32 paths: just copy the source bytes and
+      // remember the format. rowPitch is set to the natural pitch
+      // for the format.
+      f.format = cfg_.pixelFormat;
+      f.rowPitch = cfg_.width * (cfg_.pixelFormat == PixelFormat::BGR24
+                                     ? 3 : 4);
+      f.data.assign(data, data + length);
+    }
     buffer->Unlock();
     {
       std::lock_guard<std::mutex> lk(frameMutex_);

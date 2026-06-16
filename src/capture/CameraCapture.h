@@ -31,6 +31,11 @@ class CameraCapture {
     uint32_t width = 1280;
     uint32_t height = 720;
     uint32_t fps = 60;
+    // NV12 is the format the Windows Media Foundation driver stack
+    // grants for almost every USB webcam (YUY2 is the other common
+    // one). RGB32 is not always available at the requested
+    // resolution / frame rate, so we ask for NV12 and convert to
+    // BGRA in captureLoop() below — see NV12ToBgra().
     PixelFormat pixelFormat = PixelFormat::NV12;
   };
 
