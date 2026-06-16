@@ -53,6 +53,19 @@ class LandmarkSmoother {
     initialized_ = false;
   }
 
+  // v0.5: re-tune the One-Euro filter parameters in place from the
+  // adaptive controller's noise-floor + motion-magnitude readout.
+  // Updates the cached freq/mincutoff/beta and forwards the new
+  // values to every per-axis OneEuroFilter instance.
+  void AdaptParams(double newFreq, double newMincutoff, double newBeta) {
+    freq_ = newFreq;
+    mincutoff_ = newMincutoff;
+    beta_ = newBeta;
+    for (auto& f : xFilters_) f->AdaptParams(newFreq, newMincutoff, newBeta);
+    for (auto& f : yFilters_) f->AdaptParams(newFreq, newMincutoff, newBeta);
+    for (auto& f : zFilters_) f->AdaptParams(newFreq, newMincutoff, newBeta);
+  }
+
  private:
   std::array<std::optional<OneEuroFilter>, 21> xFilters_;
   std::array<std::optional<OneEuroFilter>, 21> yFilters_;

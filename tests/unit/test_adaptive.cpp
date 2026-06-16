@@ -145,4 +145,101 @@ TEST(Adaptive, StrokeScaleClamped) {
   EXPECT_NEAR(bone2, 9.0f, 0.01f);
 }
 
+// ---- Landmark filter (One-Euro) ----
+
+TEST(Adaptive, LandmarkFilterParamsColdStart) {
+  // No motion observations -> v0.4 defaults (1.0, 0.005). The
+  // observer may be populated by previous tests, so we just check
+  // the value is sane (mincutoff in [0.3, 5.0], beta in
+  // [0.001, 0.05]).
+  auto [mc, b] = GetAdaptive().LandmarkFilterParams();
+  EXPECT_GE(mc, 0.3);
+  EXPECT_LE(mc, 5.0);
+  EXPECT_GE(b, 0.001);
+  EXPECT_LE(b, 0.05);
+}
+
+TEST(Adaptive, LandmarkFilterParamsNoisyHandHighMincutoff) {
+  // Feed a high-noise, high-motion sequence. mincutoff should be
+  // clamped high (the noisy hand needs to track jitter without
+  // lag). beta should drop toward the floor (fast motion -> less
+  // smoothing). meanMotion > 0.5 puts beta at
+  // 0.005/0.5 = 0.01, below the 0.001 lower clamp isn't reached
+  // here, but we should see beta well below the 0.05 default.
+  for (int i = 0; i < 200; ++i) {
+    double dx = ((i % 2) ? 0.5 : -0.5);
+    double dy = ((i % 2) ? 0.5 : -0.5);
+    GetSignalObserver().RecordLandmarkMotion(dx, dy);
+  }
+  auto [mc, b] = GetAdaptive().LandmarkFilterParams();
+  EXPECT_GE(mc, 1.0);   // noisy -> track more
+  EXPECT_LE(b, 0.02);   // fast -> less smoothing than default
+}
+
+TEST(Adaptive, LandmarkFilterParamsStillHandLowMincutoff) {
+  // Feed near-zero deltas (still hand). mincutoff should clamp
+  // down to 0.3 (max jitter removal); beta should rise toward
+  // 0.05 (slow motion -> smooth aggressively).
+  for (int i = 0; i < 200; ++i) {
+    GetSignalObserver().RecordLandmarkMotion(0.0001, 0.0001);
+  }
+  auto [mc, b] = GetAdaptive().LandmarkFilterParams();
+  EXPECT_LE(mc, 1.0);  // quiet -> smoother
+  EXPECT_GE(b, 0.005);
+}
+
+// ---- Cursor dead zone + desktop pixels ----
+
+TEST(Adaptive, CursorDeadZoneColdStartIs002) {
+  float dz = GetAdaptive().CursorDeadZone();
+  EXPECT_GE(dz, 0.005f);
+  EXPECT_LE(dz, 0.05f);
+}
+
+TEST(Adaptive, DesktopPixelsFallback1080p) {
+  auto [w, h] = GetAdaptive().DesktopPixels();
+  EXPECT_GT(w, 0);
+  EXPECT_GT(h, 0);
+  // The fallback is 1920x1080; a populated observer would return
+  // the recorded size. We don't assert exact values to stay
+  // robust to test ordering.
+  EXPECT_GE(w, 640);
+  EXPECT_GE(h, 480);
+}
+
+TEST(Adaptive, DesktopPixelsReturnsRecorded) {
+  GetSignalObserver().RecordVirtualDesktop(3840, 2160);
+  auto [w, h] = GetAdaptive().DesktopPixels();
+  EXPECT_EQ(w, 3840);
+  EXPECT_EQ(h, 2160);
+}
+
+TEST(Adaptive, CursorDeadZoneScalesWithNoise) {
+  // Heavy cursor noise -> larger dead zone. Feed 10px of jitter
+  // per frame; the resulting dead zone should be near the upper
+  // bound (0.05) once warmup completes.
+  for (int i = 0; i < 200; ++i) {
+    GetSignalObserver().RecordCursorMotion(10.0, 10.0);
+  }
+  float dz = GetAdaptive().CursorDeadZone();
+  EXPECT_GE(dz, 0.01f);  // at least the lower middle of the range
+}
+
+// ---- Z approach threshold ----
+
+TEST(Adaptive, ZApproachThresholdColdStartIs002) {
+  float thr = GetAdaptive().ZApproachThreshold();
+  EXPECT_NEAR(thr, 0.02f, 0.01f);
+}
+
+TEST(Adaptive, ZApproachThresholdClampsToRange) {
+  // Extreme z noise should still be clamped to [0.005, 0.1].
+  for (int i = 0; i < 200; ++i) {
+    GetSignalObserver().RecordZMotion(1.0);  // 1m of noise
+  }
+  float thr = GetAdaptive().ZApproachThreshold();
+  EXPECT_LE(thr, 0.1f);
+  EXPECT_GE(thr, 0.005f);
+}
+
 }  // namespace

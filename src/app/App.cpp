@@ -590,6 +590,47 @@ void App::inferenceLoop() {
           for (auto& h : hands) {
             smoother_.Smooth(h, dt);
           }
+
+          // v0.5: feed wrist motion into the adaptive observer and
+          // retune the smoother from the rolling-window statistics.
+          // We track the right hand (the one driving the cursor)
+          // only — left-hand motion is irrelevant to cursor
+          // smoothing. AdaptParams is a no-op during cold start
+          // (AdaptiveController returns the v0.4 defaults the
+          // smoother was constructed with) so the first ~1s after
+          // init is unaffected. Preserve smoother state across
+          // retunes (OneEuroFilter::AdaptParams keeps xPrev_/
+          // dPrev_) so we don't snap on each update.
+          const HandLandmarks* right = nullptr;
+          for (const auto& h : hands) {
+            if (h.handedness == 1) { right = &h; break; }
+          }
+          if (right) {
+            if (prevRightHand_.has_value()) {
+              const double dx = static_cast<double>(right->points[0].x) -
+                                static_cast<double>(prevRightHand_->points[0].x);
+              const double dy = static_cast<double>(right->points[0].y) -
+                                static_cast<double>(prevRightHand_->points[0].y);
+              GetSignalObserver().RecordLandmarkMotion(dx, dy);
+              // v0.5: also feed the depth (world z) delta so
+              // AirClickDetector's approach threshold can adapt.
+              // World z is in meters; positive dz means the wrist
+              // moved further from the camera.
+              if (!right->world.empty() && !prevRightHand_->world.empty()) {
+                const double dz = static_cast<double>(right->world[0].z) -
+                                  static_cast<double>(prevRightHand_->world[0].z);
+                GetSignalObserver().RecordZMotion(dz);
+              }
+            }
+            prevRightHand_ = *right;
+          } else {
+            // No right hand this frame — clear the tracker so a
+            // re-appearance at a new location doesn't poison the
+            // delta with a huge first-frame jump.
+            prevRightHand_.reset();
+          }
+          auto [mc, b] = GetAdaptive().LandmarkFilterParams();
+          smoother_.AdaptParams(1.0 / dt, mc, b);
         }
 
         // Task 33: idle down-shift. If we got at least one

@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 #include <boost/lockfree/spsc_queue.hpp>
+#include <optional>
 #include "capture/CameraCapture.h"
 #include "capture/Frame.h"
 #include "inference/HandDetector.h"
@@ -172,6 +173,15 @@ class App {
   // brings us back up).
   static constexpr int    kIdleFps          = 10;
   static constexpr int64_t kIdleDownshiftMs  = 5000;
+
+  // v0.5: previous right-hand landmarks for the per-frame motion
+  // delta fed to the adaptive OneEuro filter tuner. We track the
+  // wrist (landmark 0) only — the index MCP / other points are
+  // correlated so the wrist alone is enough to characterize hand
+  // motion magnitude. Reset (cleared) whenever a hand is lost so a
+  // "hand re-appearing at a different location" doesn't pollute
+  // the deltas with a huge first-frame jump.
+  std::optional<HandLandmarks> prevRightHand_;
 };
 
 }  // namespace vmosue

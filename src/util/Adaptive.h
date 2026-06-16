@@ -83,6 +83,54 @@ class SignalObserver {
     lastFps_ = fps;
   }
 
+  // Record the average per-axis landmark delta (dx, dy) for one
+  // frame. The AdaptiveController consumes this to derive the
+  // One-Euro filter's mincutoff (from motion noise floor) and beta
+  // (from typical motion magnitude).
+  void RecordLandmarkMotion(double dx, double dy) {
+    std::lock_guard<std::mutex> lk(mu_);
+    ++framesObserved_;
+    lmdxIdx_ = (lmdxIdx_ + 1) % kRollingWindowSize;
+    lmdyIdx_ = (lmdyIdx_ + 1) % kRollingWindowSize;
+    lmdxBuf_[lmdxIdx_] = dx;
+    lmdyBuf_[lmdyIdx_] = dy;
+  }
+
+  // Record the cursor pixel delta. AdaptiveController uses this to
+  // derive the cursor dead-zone (from observed stillness noise).
+  void RecordCursorMotion(double dx, double dy) {
+    std::lock_guard<std::mutex> lk(mu_);
+    curdxIdx_ = (curdxIdx_ + 1) % kRollingWindowSize;
+    curdyIdx_ = (curdyIdx_ + 1) % kRollingWindowSize;
+    curdxBuf_[curdxIdx_] = dx;
+    curdyBuf_[curdyIdx_] = dx;
+    curdyBuf_[curdyIdx_] = dy;  // intentionally overwrite the stray above
+  }
+
+  // Cache the virtual-desktop dimensions. Called once on
+  // OverlayWindow::Init; consumed by CursorController for pixel
+  // conversion (replacing the v0.4 hard-coded 1920x1080).
+  void RecordVirtualDesktop(int w, int h) {
+    std::lock_guard<std::mutex> lk(mu_);
+    virtW_ = w;
+    virtH_ = h;
+  }
+
+  // Record the per-frame z (depth) delta. World-space z is in
+  // meters and is noisier than the x/y image-space coords, so it
+  // gets its own rolling window. Consumed by
+  // AdaptiveController::ZApproachThreshold() to set the
+  // air-click approach distance relative to the observed noise
+  // floor (3-sigma rule). Tracked independently of the x/y
+  // landmark motion window because the units and noise
+  // characteristics are different.
+  void RecordZMotion(double dz) {
+    std::lock_guard<std::mutex> lk(mu_);
+    ++framesObserved_;
+    zIdx_ = (zIdx_ + 1) % kRollingWindowSize;
+    zBuf_[zIdx_] = dz;
+  }
+
   // ---- Accessors (called under lock by AdaptiveController) ----
 
   struct ScoreStats {
@@ -147,6 +195,86 @@ class SignalObserver {
     return lastFps_;
   }
 
+  struct MotionStats {
+    bool hasData;
+    double meanAbsDx, meanAbsDy;     // typical motion magnitude
+    double stdDx, stdDy;              // motion noise floor
+  };
+  MotionStats GetLandmarkMotion() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    MotionStats s{};
+    s.hasData = lmdxIdx_ >= 0 && framesObserved_ >= kColdStartFrames;
+    if (!s.hasData) return s;
+    int n = std::min<int>(lmdxIdx_ + 1, kRollingWindowSize);
+    // We track signed sums (for std) and abs sums (for meanAbs)
+    // separately. The std formula is var = E[X^2] - (E[X])^2 where
+    // E[X] is the arithmetic mean, NOT the mean of absolute values.
+    // An earlier version reused the abs sum for both and got
+    // std=0 for any signal symmetric around 0 (e.g. alternating
+    // +/-0.05 jitter) because the abs mean cancels the variance.
+    double sumDxSigned = 0, sumDySigned = 0;
+    double sumDxAbs = 0, sumDyAbs = 0;
+    double sumDxSq = 0, sumDySq = 0;
+    for (int i = 0; i < n; ++i) {
+      sumDxSigned += lmdxBuf_[i];
+      sumDySigned += lmdyBuf_[i];
+      sumDxAbs   += std::fabs(lmdxBuf_[i]);
+      sumDyAbs   += std::fabs(lmdyBuf_[i]);
+      sumDxSq    += lmdxBuf_[i] * lmdxBuf_[i];
+      sumDySq    += lmdyBuf_[i] * lmdyBuf_[i];
+    }
+    const double meanDx = sumDxSigned / n;
+    const double meanDy = sumDySigned / n;
+    s.meanAbsDx = sumDxAbs / n;
+    s.meanAbsDy = sumDyAbs / n;
+    s.stdDx = std::sqrt(std::max(0.0, sumDxSq / n - meanDx * meanDx));
+    s.stdDy = std::sqrt(std::max(0.0, sumDySq / n - meanDy * meanDy));
+    return s;
+  }
+
+  struct CursorMotionStats {
+    bool hasData;
+    double stdDx, stdDy;  // observed stillness noise in pixels
+  };
+  CursorMotionStats GetCursorMotion() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    CursorMotionStats s{};
+    s.hasData = curdxIdx_ >= 0 && framesObserved_ >= kColdStartFrames;
+    if (!s.hasData) return s;
+    int n = std::min<int>(curdxIdx_ + 1, kRollingWindowSize);
+    double sumDxSq = 0, sumDySq = 0;
+    for (int i = 0; i < n; ++i) {
+      sumDxSq += curdxBuf_[i] * curdxBuf_[i];
+      sumDySq += curdyBuf_[i] * curdyBuf_[i];
+    }
+    s.stdDx = std::sqrt(sumDxSq / n);
+    s.stdDy = std::sqrt(sumDySq / n);
+    return s;
+  }
+
+  std::pair<int, int> VirtualDesktop() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return {virtW_, virtH_};
+  }
+
+  struct ZMotionStats {
+    bool hasData;
+    double stdDz;  // stddev of per-frame depth deltas (meters)
+  };
+  ZMotionStats GetZMotion() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    ZMotionStats s{};
+    s.hasData = zIdx_ >= 0 && framesObserved_ >= kColdStartFrames;
+    if (!s.hasData) return s;
+    int n = std::min<int>(zIdx_ + 1, kRollingWindowSize);
+    double sumSq = 0;
+    for (int i = 0; i < n; ++i) {
+      sumSq += zBuf_[i] * zBuf_[i];
+    }
+    s.stdDz = std::sqrt(sumSq / n);
+    return s;
+  }
+
   int FramesObserved() const {
     std::lock_guard<std::mutex> lk(mu_);
     return framesObserved_;
@@ -174,6 +302,22 @@ class SignalObserver {
   std::array<double, kRollingWindowSize> renderMsBuf_{};
   int renderMsIdx_ = -1;
   double lastFps_ = 30.0;  // safe default until observed
+
+  std::array<double, kRollingWindowSize> lmdxBuf_{};
+  std::array<double, kRollingWindowSize> lmdyBuf_{};
+  int lmdxIdx_ = -1;
+  int lmdyIdx_ = -1;
+
+  std::array<double, kRollingWindowSize> curdxBuf_{};
+  std::array<double, kRollingWindowSize> curdyBuf_{};
+  int curdxIdx_ = -1;
+  int curdyIdx_ = -1;
+
+  std::array<double, kRollingWindowSize> zBuf_{};
+  int zIdx_ = -1;
+
+  int virtW_ = 1920;
+  int virtH_ = 1080;
 };
 
 // Global instance; consumers read directly. Singleton is OK here
@@ -270,6 +414,90 @@ class AdaptiveController {
     if (scale < 0.5f) scale = 0.5f;
     if (scale > 3.0f) scale = 3.0f;
     return {3.0f * scale, 5.0f * scale};
+  }
+
+  // One-Euro filter parameters (mincutoff, beta).
+  //
+  // Principle:
+  //   - mincutoff = clamp(k_nf * sigma_noise, 0.3, 5.0). The noise
+  //     floor sigma_noise is the observed std of landmark position
+  //     deltas when the hand is still (no large gestures in flight).
+  //     A noisy hand needs a higher mincutoff to track the noise
+  //     without lag; a stable hand gets a low mincutoff for
+  //     maximum jitter removal.
+  //   - beta = clamp(k_beta / (median_dx + epsilon), 0.001, 0.05).
+  //     The slower the typical motion, the more aggressively we
+  //     smooth (high beta); the faster the motion, the less
+  //     smoothing (low beta) to keep cursor responsive.
+  //
+  // Cold-start: (1.0, 0.005) — v0.4 defaults.
+  std::pair<double, double> LandmarkFilterParams() const {
+    auto s = GetSignalObserver().GetLandmarkMotion();
+    if (!s.hasData) return {1.0, 0.005};
+    double sigma = std::max(s.stdDx, s.stdDy);
+    double meanMotion = std::max(s.meanAbsDx, s.meanAbsDy);
+    constexpr double kNf = 50.0;       // mincutoff = 50 * sigma
+    constexpr double kBeta = 0.005;    // beta = 0.005 / mean_motion
+    constexpr double epsilon = 1e-4;
+    double mincutoff = std::clamp(kNf * sigma, 0.3, 5.0);
+    double beta = std::clamp(kBeta / (meanMotion + epsilon),
+                              0.001, 0.05);
+    return {
+      BlendWithFallback(static_cast<float>(mincutoff), 1.0f),
+      BlendWithFallback(static_cast<float>(beta), 0.005f),
+    };
+  }
+
+  // Cursor dead zone in normalized [0, 1] coords.
+  //
+  // Principle:  deadZone = clamp(3 * sigma_still / frameSize, 0.005, 0.05).
+  // sigma_still is the std of cursor pixel deltas during "still" frames
+  // (low motion magnitude). Dividing by frameSize converts pixel noise
+  // back to normalized coords. The 3-sigma factor catches ~99.7% of
+  // jitter without swallowing real intentional motion.
+  //
+  // Cold-start: 0.02 (v0.4 default).
+  float CursorDeadZone() const {
+    auto s = GetSignalObserver().GetCursorMotion();
+    if (!s.hasData) return 0.02f;
+    auto [virtW, virtH] = GetSignalObserver().VirtualDesktop();
+    double frameSize = static_cast<double>(virtW + virtH) * 0.5;
+    double sigma = std::max(s.stdDx, s.stdDy);
+    double adaptive = 3.0 * sigma / frameSize;
+    if (adaptive < 0.005) adaptive = 0.005;
+    if (adaptive > 0.05)  adaptive = 0.05;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.02f);
+  }
+
+  // Virtual desktop pixel dimensions.
+  //
+  // Principle: read from the observer (set once on OverlayWindow::Init).
+  // Returns the cached (width, height). Cold-start fallback: (1920, 1080).
+  std::pair<int, int> DesktopPixels() const {
+    auto p = GetSignalObserver().VirtualDesktop();
+    if (p.first <= 0 || p.second <= 0) return {1920, 1080};
+    return p;
+  }
+
+  // Air-click approach threshold in world-space meters.
+  //
+  // Principle:  threshold = clamp(3 * sigma_z, 0.005, 0.1).
+  // sigma_z is the stddev of wrist (or any tracked landmark) depth
+  // deltas — a depth-accurate proxy for "how much does the depth
+  // estimate jiggle on a still hand." The 3-sigma factor catches
+  // ~99.7% of noise without swallowing real intentional forward
+  // push. Floor (0.005 m) prevents false clicks in low-noise
+  // conditions; ceiling (0.1 m) prevents miss in very noisy
+  // conditions (e.g. low-cost ToF cameras).
+  //
+  // Cold-start: 0.02 m (v0.4 default).
+  float ZApproachThreshold() const {
+    auto s = GetSignalObserver().GetZMotion();
+    if (!s.hasData) return 0.02f;
+    double adaptive = 3.0 * s.stdDz;
+    if (adaptive < 0.005) adaptive = 0.005;
+    if (adaptive > 0.1)   adaptive = 0.1;
+    return BlendWithFallback(static_cast<float>(adaptive), 0.02f);
   }
 
  private:

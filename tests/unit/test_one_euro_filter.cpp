@@ -36,3 +36,22 @@ TEST(OneEuroFilter, ResetsOnNewInstance) {
   OneEuroFilter b(30.0, 1.0, 0.0, 1.0);
   EXPECT_NEAR(b.Filter(0.0, 1.0 / 30.0), 0.0, 0.01);
 }
+
+TEST(OneEuroFilter, AdaptParamsDoesNotSnap) {
+  // After AdaptParams the filter should continue from its current
+  // state, not snap to the new input. We prime the filter to ~5.0,
+  // retune to a much more aggressive (low-mincutoff) config, and
+  // feed the same input again. The output should be close to 5.0,
+  // not jump to 10.0.
+  OneEuroFilter f(30.0, 1.0, 0.0, 1.0);
+  for (int i = 0; i < 30; ++i) {
+    f.Filter(5.0, 1.0 / 30.0);
+  }
+  f.AdaptParams(30.0, 0.1, 0.0);  // very heavy smoothing
+  double v = f.Filter(10.0, 1.0 / 30.0);
+  // With mincutoff=0.1 the cutoff barely moves from the previous
+  // smooth value, so the output should still be near 5 (well below
+  // 10). We give a generous tolerance for the derivative term.
+  EXPECT_LT(v, 7.0);
+  EXPECT_GT(v, 3.0);
+}

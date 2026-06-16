@@ -37,6 +37,18 @@ class OneEuroFilter {
 
   void Reset() { initialized_ = false; }
 
+  // v0.5: retune the filter in place. The One-Euro cutoff formula
+  // re-derives alpha on every Filter() call from (freq, mincutoff,
+  // beta) plus the running derivative, so updating the cached
+  // members is enough — no internal alpha needs to be invalidated.
+  // We deliberately preserve xPrev_/dPrev_ so the smoother does not
+  // snap on each adaptation.
+  void AdaptParams(double newFreq, double newMincutoff, double newBeta) {
+    freq_ = newFreq;
+    mincutoff_ = newMincutoff;
+    beta_ = newBeta;
+  }
+
  private:
   static double smoothingFactor(double te, double cutoff, double dt) {
     double r = 2.0 * M_PI * cutoff * dt;

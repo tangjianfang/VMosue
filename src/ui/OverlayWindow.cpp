@@ -59,6 +59,12 @@ bool OverlayWindow::Init(HWND hwndParent) {
   virtY_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
   virtW_ = GetSystemMetrics(SM_CXVIRTUALSCREEN);
   virtH_ = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+  // v0.5: cache the virtual-desktop size in the adaptive observer
+  // so CursorController and any other "screen-size dependent"
+  // tunable can read it via GetAdaptive().DesktopPixels(). The
+  // previous hard-coded 1920x1080 made cursor motion wrong on 4K
+  // and multi-monitor setups.
+  GetSignalObserver().RecordVirtualDesktop(virtW_, virtH_);
   hwnd_ = CreateWindowEx(
       WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
       kClassName, L"", WS_POPUP,
