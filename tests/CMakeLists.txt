@@ -27,6 +27,7 @@ add_executable(vmosue_tests
   unit/test_hand_skeleton.cpp
   unit/test_overlay_geometry.cpp
   unit/test_adaptive.cpp
+  unit/test_camera_capture.cpp
   integration/test_pipeline_e2e.cpp
   integration/test_action_map.cpp
   # Watchdog is a standalone utility compiled into the vmosue
@@ -38,6 +39,7 @@ add_executable(vmosue_tests
 )
 target_link_libraries(vmosue_tests PRIVATE
   vmosue_util
+  vmosue_capture
   vmosue_gesture
   vmosue_input
   vmosue_platform

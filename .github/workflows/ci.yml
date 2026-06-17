@@ -44,3 +44,134 @@ jobs:
         run: |
           python -m pip install --quiet numpy
           python -m unittest discover -s tests/python -p "test_*.py" -v
+
+      # Optional smoke test: only runs when the model file has been
+      # pre-placed (e.g. via a secret-driven download step in a
+      # separate workflow). Validates that the Python IPC bridge +
+      # world-landmark flow round-trips correctly. Skipped silently
+      # when the model is absent so the main CI job is not blocked.
+      - name: Python IPC smoke test (optional, needs model)
+        shell: pwsh
+        run: |
+          $model = "resources/models/hand_landmarker.task"
+          if (Test-Path $model) {
+            python -m pip install --quiet mediapipe numpy
+            python -c "
+          import sys, json, os, subprocess, time
+          srv = subprocess.Popen(
+              [sys.executable, '-u', 'scripts/hand_detector_server.py',
+               '--model', 'resources/models/hand_landmarker.task'],
+              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          ready = json.loads(srv.stdout.readline())
+          assert ready.get('status') == 'ready', f'Bad handshake: {ready}'
+          # Send a 1x1 black BGRA frame.
+          import struct
+          w, h = 1, 1
+          meta = json.dumps({'width': w, 'height': h, 'length': w*h*4}).encode() + b'\n'
+          frame = bytes(w*h*4)
+          srv.stdin.write(meta + frame); srv.stdin.flush()
+          resp = json.loads(srv.stdout.readline())
+          assert 'hand_count' in resp, f'Missing hand_count: {resp}'
+          srv.stdin.close(); srv.wait(timeout=5)
+          print('IPC smoke test passed')
+          "
+          } else {
+            Write-Host "Model not found; skipping IPC smoke test"
+          }
+
+  # AddressSanitizer job: builds the test binary with /fsanitize=address
+  # and runs the full suite. Catches memory-safety issues (use-after-free,
+  # out-of-bounds, etc.) that the Release build silently ignores.
+  # Runs on a separate job so a ASAN-related CI flake doesn't block the
+  # main build result.
+  asan-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 9e3a78bf79448391654b2490573a06b1bb6085b0
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_installed
+          key: vcpkg-asan-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure (ASAN)
+        # /fsanitize=address requires Debug or RelWithDebInfo; we use
+        # RelWithDebInfo to keep optimizations while getting ASAN checks.
+        # VMOSUE_BUILD_TESTS=ON is the default; listed explicitly for clarity.
+        run: >
+          cmake -B build_asan -S .
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_installed/x64-windows/share/vcpkg/vcpkg.cmake"
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS="/fsanitize=address"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build tests (ASAN)
+        run: cmake --build build_asan --config RelWithDebInfo --target vmosue_tests --parallel
+
+      - name: Run tests (ASAN)
+        run: ctest --test-dir build_asan --output-on-failure -C RelWithDebInfo
+        env:
+          # Suppress ASAN false-positives from MSVC runtime internals.
+          ASAN_OPTIONS: "windows_hook_rtl_allocators=true"
+
+  # Code coverage job: instruments the test binary and uploads a report.
+  # Uses OpenCppCoverage (available on windows-2022 runners via choco).
+  coverage-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: 9e3a78bf79448391654b2490573a06b1bb6085b0
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_installed
+          key: vcpkg-cov-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Install OpenCppCoverage
+        run: choco install opencppcoverage -y --no-progress
+
+      - name: Configure (Debug for coverage)
+        run: >
+          cmake -B build_cov -S .
+          -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg_installed/x64-windows/share/vcpkg/vcpkg.cmake"
+          -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build tests (Debug)
+        run: cmake --build build_cov --config Debug --target vmosue_tests --parallel
+
+      - name: Run with coverage
+        run: >
+          OpenCppCoverage
+          --sources "${{ github.workspace }}\src"
+          --excluded_sources "${{ github.workspace }}\build_cov"
+          --export_type cobertura:coverage.xml
+          -- build_cov\bin\Debug\vmosue_tests.exe
+        continue-on-error: true  # don't fail the whole job if coverage tool has issues
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: warn
