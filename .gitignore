@@ -39,6 +39,10 @@ vcpkg_installed/
 /build-cmake.bat
 /build-ninja.bat
 
+# Python (hand_detector_server + its unit tests)
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db

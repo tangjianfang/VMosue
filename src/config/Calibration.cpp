@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
+#include <system_error>  // std::error_code (atomic-write rename/remove)
 
 namespace vmosue {
 
@@ -92,13 +93,40 @@ Result<void> Calibration::Save(const std::string& profileName,
   }
 
   const auto path = ProfilePath(profileName);
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out) {
-    return Result<void>::Err("Failed to open profile for write: " + path.string());
+
+  // Atomic write: write to <path>.tmp, flush, then rename over the
+  // destination. Mirrors Config::Save so a crash mid-write leaves any
+  // existing profile intact instead of truncating it to a partial
+  // (and unparseable) file. The previous direct-write path could
+  // corrupt a good profile if the process died between open and the
+  // final byte.
+  const auto tmpPath = path.string() + ".tmp";
+  {
+    std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      return Result<void>::Err("Failed to open temp profile for write: " +
+                               tmpPath);
+    }
+    out << ParamsToJson(params).dump(2);
+    if (!out) {
+      return Result<void>::Err("Failed to write temp profile: " + tmpPath);
+    }
+    out.flush();
+    if (!out) {
+      return Result<void>::Err("Failed to flush temp profile: " + tmpPath);
+    }
   }
-  out << ParamsToJson(params).dump(2);
-  if (!out) {
-    return Result<void>::Err("Failed to write profile: " + path.string());
+
+  // rename() over an existing destination is atomic on Windows (Vista+
+  // MoveFileEx with MOVEFILE_REPLACE_EXISTING); the std::filesystem
+  // overload uses it.
+  std::error_code renameEc;
+  std::filesystem::rename(tmpPath, path, renameEc);
+  if (renameEc) {
+    std::error_code rmEc;
+    std::filesystem::remove(tmpPath, rmEc);  // best-effort cleanup
+    return Result<void>::Err("Failed to rename temp profile: " +
+                             renameEc.message());
   }
   return Result<void>::Ok({});
 }

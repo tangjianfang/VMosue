@@ -7,7 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- **Adaptive parameters (v0.5).** Every environment- or signal-derived
+  tunable is now a deterministic function of observed signals instead
+  of a hard-coded constant or a user slider. The phantom-hand filter
+  uses a score-gap rule, the overlay colour tiers use rolling
+  percentiles, the render cadence tracks the observed camera FPS, the
+  1-Euro smoothing adapts to the measured noise floor and motion
+  magnitude, the cursor dead-zone adapts to cursor stillness, and the
+  pinch / scroll / air-click thresholds adapt to the observed motion
+  range. Cold-start falls back to the v0.4 constants and blends in over
+  the first ~2 s. See `docs/superpowers/specs/2026-06-17-adaptive-parameters.md`.
+- **Middle click** — thumb-to-middle-finger pinch and release on the
+  right hand emits a middle (mouse-wheel) click. Left click wins if
+  both pinches are detected in the same instant.
+- **Horizontal scrolling** — the two-finger scroll gesture on the left
+  hand now sends horizontal-wheel (tilt) events for left/right hand
+  motion in addition to the existing vertical wheel.
+- **System-aligned double-click window** — the pinch double-click
+  interval now follows the user's Windows mouse double-click speed
+  (`GetDoubleClickTime`, clamped to 200–900 ms) instead of a hard-coded
+  400 ms, so the gesture matches every other double-click on the
+  machine.
+- **World landmarks over the IPC bridge** — the Python detector now
+  emits metric `world_landmarks` alongside the normalized landmarks.
+
+### Changed
+
+- **Settings window** dropped the sensitivity / threshold sliders in
+  favour of live "Adaptive (auto)" readouts of the currently-derived
+  values (v0.5 Wave 4).
+- **Render hot path** — cut per-frame allocation and latency: the
+  capture loop reuses a single `Frame` buffer across iterations instead
+  of reallocating the ~3.6 MB pixel vector every frame; the IPC
+  metadata line is hand-serialized instead of going through the general
+  JSON serializer; and `ProfileGuard::P95Ms` uses `nth_element` (O(N))
+  instead of a full sort.
+- Cursor X is inverted to match the user-perceived hand direction
+  (selfie-mirrored webcam convention).
+
+### Fixed
+
+- **Right-click gesture now works in production.** The push-toward-
+  camera right click reads `world[8].z` (index-fingertip depth), but
+  the IPC parser only ever populated the normalized `points` array and
+  the Python server never sent world landmarks — so `world` was always
+  all-zero and the gesture could never fire outside the unit tests.
+  The server now emits world landmarks and the C++ parser populates
+  `HandLandmarks::world`.
+- **Hand-detector subprocess auto-recovers from a crash.** `Detect()`
+  checks the child process is still alive and respawns it (bounded to
+  three attempts per dead streak, reset on the next healthy frame)
+  instead of writing into a broken pipe forever and freezing the
+  cursor.
+- **Python detector survives a bad frame.** Per-frame processing is
+  wrapped so a transient MediaPipe error or malformed frame degrades to
+  a "zero hands" response instead of crashing the whole subprocess. The
+  metadata validator also rejects absurd frame dimensions (> ~35 MP)
+  before any buffer is allocated.
+- **Calibration profiles are written atomically** (temp file + rename),
+  matching `Config::Save`, so a crash mid-write can no longer truncate
+  an existing profile.
+- **Cursor controller guards against non-finite landmarks and oversized
+  virtual-desktop dimensions**, preventing undefined behaviour in the
+  normalized-to-pixel cast.
+- Right click is suppressed when a left or middle button event fires in
+  the same frame, preventing a conflicting `leftUp + rightClick`
+  injection during a pinch-drag that ends on a forward push.
+
+### Removed
+
+- Dead `AirClickDetector::Phase::Retreat` state and the unused
+  `baseZ_` / `palmStableAtStart_` fields.
 
 ## [1.0.0] - 2026-06-14
 

@@ -80,9 +80,24 @@ class HandDetector {
   int InferenceWidth()  const { return cfg_.inferenceWidth; }
   int InferenceHeight() const { return cfg_.inferenceHeight; }
 
+  // Visible for testing: how many consecutive automatic respawns have
+  // been attempted since the last healthy frame. Reset to 0 after any
+  // successful Detect() round-trip.
+  int RespawnCount() const { return respawnCount_; }
+
  private:
+  // Attempt to bring the Python subprocess back up after it has died
+  // (GetExitCodeProcess != STILL_ACTIVE) or after an I/O failure.
+  // Bounded by kMaxRespawns within a single dead streak so a
+  // permanently broken environment (e.g. mediapipe uninstalled)
+  // doesn't spin the CPU respawning forever. Returns true if a fresh
+  // child is ready. Defined in the .cpp.
+  bool TryRespawn();
+
   Config cfg_;
   bool initialized_ = false;
+  int respawnCount_ = 0;
+  static constexpr int kMaxRespawns = 3;
   // v0.3: Python subprocess driving MediaPipe Hands. The full
   // definition of ChildHandles lives in HandDetector.cpp (it owns
   // Win32 HANDLEs whose dtor needs the complete type). We use a

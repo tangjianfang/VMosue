@@ -53,6 +53,17 @@ class DisplayInfo {
   // Current OS cursor position. Returns {0, 0} if GetCursorPos fails;
   // callers should treat that as a soft error and not crash.
   static POINT CursorPos();
+
+  // The user's configured double-click interval, in milliseconds, as
+  // set in Windows Mouse settings (GetDoubleClickTime). VMosue's pinch
+  // double-click should match the user's existing system preference
+  // rather than a hard-coded window — this keeps the gesture in step
+  // with every other double-click on the machine. Clamped to a sane
+  // [200, 900] ms range (the Win32 default is 500 ms) so a corrupt
+  // registry value can't make the gesture unusable. This is "observe
+  // system state," consistent with the v0.5 adaptive-parameters
+  // principle, not a new in-app user preference.
+  static int SystemDoubleClickTimeMs();
 };
 
 }  // namespace vmosue

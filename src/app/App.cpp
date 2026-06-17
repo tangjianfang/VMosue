@@ -3,6 +3,7 @@
 #include "app/Watchdog.h"
 #include "config/Config.h"
 #include "input/InputInjector.h"
+#include "platform/DisplayInfo.h"
 #include "platform/Hotkey.h"
 #include "util/Adaptive.h"
 #include "util/FrameResampler.h"
@@ -138,7 +139,14 @@ int App::Run() {
                   initialPerf.useGpu ? "on" : "off",
                   hcfg.inferenceWidth, hcfg.inferenceHeight);
 
-  sm_.Init({});
+  // Match the pinch double-click window to the user's Windows mouse
+  // setting instead of the hard-coded 400 ms default, so a "double
+  // click" gesture feels the same as every other double-click on the
+  // machine. This observes system state (v0.5 adaptive principle), not
+  // a new in-app preference.
+  GestureStateMachine::Config gcfg;
+  gcfg.click.doubleClickWindowMs = DisplayInfo::SystemDoubleClickTimeMs();
+  sm_.Init(gcfg);
 
   if (!overlay_.Init(nullptr)) VMOSUE_LOG_WARN("Overlay init failed");
 
@@ -458,6 +466,16 @@ void App::captureLoop() {
     // requested without us ever catching up).
     using clock = std::chrono::steady_clock;
     auto last_tick = clock::now();
+    // Reuse one Frame across iterations. TryGetLatestFrame does
+    // `out = latestFrame_`, and assigning into a vector that already
+    // has capacity reuses its buffer instead of reallocating. A
+    // loop-local `Frame f` started empty every iteration, so the
+    // 3.6 MB (720p BGRA) data vector was re-allocated ~30x/second —
+    // exactly the malloc churn the capture side works to avoid. The
+    // SPSC push still copies into the queue's ring slots (those slots
+    // also retain capacity across pushes), so the only allocation
+    // this removes is the per-iteration one, but it's the hot one.
+    Frame f;
     while (running_.load()) {
       // Task 24: heartbeating at the top of the loop means a
       // thread that is alive and scheduling gets a tick at least
@@ -478,7 +496,6 @@ void App::captureLoop() {
       const int liveFps  = currentFps_.load(std::memory_order_relaxed);
       const int targetFps = std::max(1, std::min(mode.captureFps, liveFps));
 
-      Frame f;
       if (cam_.TryGetLatestFrame(f)) {
         // SPSC: push() only fails if the queue is full, in which case
         // we drop the new frame. The capture thread runs at the

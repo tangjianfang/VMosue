@@ -19,10 +19,9 @@ namespace vmosue {
 //   - Header-only so callers don't need to link a separate TU.
 //   - Static counters live in the class itself; multi-instance use
 //     is supported by passing a `name` tag at construction.
-//   - The P95 is computed from a rolling 64-sample window. The
-//     64-sample window is small enough to keep the sort cheap
-//     (O(N log N) at ~6 comparisons) and large enough to smooth
-//     over single-frame stalls.
+//   - The P95 is computed from a rolling 64-sample window via
+//     std::nth_element (O(N) average), small enough to be cheap and
+//     large enough to smooth over single-frame stalls.
 //   - Threshold: 60ms by default, matching the spec. The 60ms
 //     number is the wall-clock budget for the inference thread's
 //     per-frame work; a violation is a "we're missing the cadence"
@@ -83,13 +82,16 @@ class ProfileGuard {
     auto& v = Series(name);
     if (v.empty()) return 0.0;
     std::vector<double> copy = v;
-    std::sort(copy.begin(), copy.end());
     // P95 = the value at the 95th percentile index. With a small
     // window the index is rounded up so we get the actual sample
     // at-or-just-past the 95% mark.
     const size_t idx = std::min(
         copy.size() - 1,
         static_cast<size_t>(std::ceil(0.95 * copy.size()) - 1));
+    // nth_element partitions in O(N) average instead of the O(N log N)
+    // of a full sort: we only need the single element at `idx` to be
+    // in its final sorted position, not the whole window ordered.
+    std::nth_element(copy.begin(), copy.begin() + idx, copy.end());
     return copy[idx];
   }
 

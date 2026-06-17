@@ -20,9 +20,13 @@ gloves, no controllers, no special hardware.
       user
 ```
 
-> **Status:** Pre-alpha. See [docs/superpowers/specs/](docs/superpowers/specs/)
-> for the design and [docs/superpowers/plans/](docs/superpowers/plans/)
-> for the implementation plan.
+> **Status:** v1.0.0 released (2026-06-14); active development continues
+> on `main` (see the [Changelog](CHANGELOG.md) `[Unreleased]` section).
+> Despite the 1.0 version number this is still early software — expect
+> rough edges, especially in unusual lighting or with unusual cameras.
+> See [docs/superpowers/specs/](docs/superpowers/specs/) for the design
+> and [docs/superpowers/plans/](docs/superpowers/plans/) for the
+> implementation plan.
 
 ## Installation
 

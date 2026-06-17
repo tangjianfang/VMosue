@@ -224,7 +224,20 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
     case ClickEvent::MiddleClick:     local.middleClick = true; break;    // thumb-middle pinch
     default: break;
   }
-  if (airClick_.OnLandmarks(*right, ts) == AirClickEvent::RightClick) {
+  // Right-click (push-toward-camera) arbitration. The air-click and
+  // pinch detectors run on the same hand independently, so a frame
+  // that both ends a pinch-drag (leftUp) and completes a forward
+  // push could inject `leftUp + rightClick` together — the OS would
+  // see a left-release racing a right-click, which apps interpret
+  // unpredictably. We run the detector unconditionally so its phase
+  // state stays current, but drop the resulting click when any
+  // left/middle button event already fired this frame. This extends
+  // the existing "left wins" priority (used for the middle click) to
+  // the right click.
+  bool leftBusy = local.leftClick || local.leftDoubleClick ||
+                  local.leftDown || local.leftUp || local.middleClick;
+  if (airClick_.OnLandmarks(*right, ts) == AirClickEvent::RightClick &&
+      !leftBusy) {
     local.rightClick = true;
   }
   if (local.leftClick || local.leftDown || local.leftUp ||

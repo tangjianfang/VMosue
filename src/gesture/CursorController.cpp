@@ -30,7 +30,16 @@ void CursorController::OnLandmarks(const HandLandmarks& right, ActionSet& action
   // carries the v0.4 defaults for tests, but production paths
   // ignore cfg_.deadZoneNorm and the hard-coded 1920x1080.
   const float dz = GetAdaptive().CursorDeadZone();
-  const auto [virtW, virtH] = GetAdaptive().DesktopPixels();
+  auto [virtW, virtH] = GetAdaptive().DesktopPixels();
+  // Defensive clamp. DesktopPixels() already floors at (1920,1080),
+  // but an unusual multi-monitor virtual desktop could report a very
+  // large extent; cap it so `dx * virtW` below can't overflow a
+  // 32-bit int when sensitivity is high. 32767 covers any real screen
+  // arrangement (the Win32 virtual desktop itself is bounded near
+  // there) while keeping the float->int product comfortably in range.
+  constexpr int kMaxDim = 32767;
+  if (virtW <= 0 || virtW > kMaxDim) virtW = (virtW <= 0) ? 1920 : kMaxDim;
+  if (virtH <= 0 || virtH > kMaxDim) virtH = (virtH <= 0) ? 1080 : kMaxDim;
 
   // WebCam frames are natively mirrored (selfie convention), so the
   // MediaPipe landmark x grows toward the user's actual right hand
@@ -41,6 +50,13 @@ void CursorController::OnLandmarks(const HandLandmarks& right, ActionSet& action
   // Y is left untouched because webcam vertical is not mirrored.
   float dx = -(p.x - prevPivot_->x) * cfg_.sensitivityX;
   float dy = (p.y - prevPivot_->y) * cfg_.sensitivityY;
+  // Guard against NaN/Inf landmarks (a malformed detector frame). A
+  // non-finite delta would make the static_cast<int> below undefined
+  // behavior, so drop the frame cleanly and re-baseline next frame.
+  if (!std::isfinite(dx) || !std::isfinite(dy)) {
+    prevPivot_ = p;
+    return;
+  }
   if (std::fabs(dx) < dz) dx = 0.0f;
   if (std::fabs(dy) < dz) dy = 0.0f;
   // Convert normalized motion to pixel motion. virtW/virtH are the

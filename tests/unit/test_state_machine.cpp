@@ -49,6 +49,38 @@ TEST(StateMachine, ActiveEmitsClickOnPinch) {
   EXPECT_TRUE(actions.leftClick);
 }
 
+// A right hand that is NOT pinching (thumb/index/middle far apart) but
+// whose world index-fingertip depth can be driven for the air-click
+// push gesture. world[0] is the wrist; world[8] is the index tip.
+static HandLandmarks rightHandPush(float indexZ, float wristZ) {
+  HandLandmarks lm{};
+  lm.handedness = 1;
+  lm.points[4]  = {0.0f, 0.0f, 0.0f};  // thumb tip
+  lm.points[5]  = {0.5f, 0.5f, 0.0f};  // index MCP (cursor pivot, stable)
+  lm.points[8]  = {0.3f, 0.0f, 0.0f};  // index tip — far from thumb (no pinch)
+  lm.points[12] = {0.4f, 0.0f, 0.0f};  // middle tip — far from thumb
+  for (auto& w : lm.world) w.z = wristZ;
+  lm.world[8].z = indexZ;
+  return lm;
+}
+
+// Regression for the right-click arbitration: a clean push-toward-
+// camera (no competing left/middle pinch) must still emit a right
+// click. The arbitration only suppresses the right click when a
+// left/middle button event fires in the SAME frame; the happy path
+// must be untouched.
+TEST(StateMachine, EmitsRightClickOnCleanPush) {
+  GestureStateMachine sm;
+  sm.Init({});
+  sm.Resume();
+  sm.OnLandmarks({rightHandPush(0.0f, 0.0f)}, 1000, 1.0/30.0);
+  sm.OnLandmarks({rightHandPush(-0.05f, 0.0f)}, 1050, 1.0/30.0);
+  sm.OnLandmarks({rightHandPush(0.0f, 0.0f)}, 1150, 1.0/30.0);
+  auto actions = sm.ConsumeActions();
+  EXPECT_TRUE(actions.rightClick);
+  EXPECT_FALSE(actions.leftClick);
+}
+
 TEST(StateMachine, TracksBothHands) {
   GestureStateMachine sm;
   sm.Init({});

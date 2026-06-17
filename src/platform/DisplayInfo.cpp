@@ -85,4 +85,16 @@ POINT DisplayInfo::CursorPos() {
   return p;
 }
 
+int DisplayInfo::SystemDoubleClickTimeMs() {
+  // GetDoubleClickTime never fails; it returns the current setting
+  // (default 500 ms). Clamp to a usable band: below ~200 ms a pinch
+  // double-click is physically hard to perform, and above ~900 ms a
+  // stray second pinch would be merged unexpectedly. A corrupt
+  // registry value (the setting is a raw DWORD) is thus contained.
+  UINT ms = ::GetDoubleClickTime();
+  if (ms < 200) ms = 200;
+  if (ms > 900) ms = 900;
+  return static_cast<int>(ms);
+}
+
 }  // namespace vmosue

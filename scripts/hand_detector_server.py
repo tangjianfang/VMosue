@@ -16,12 +16,20 @@ subprocess and talks to it over stdin/stdout. Per-frame wire protocol:
        "image_height": int,
        "hands": [{"handedness": "Left"|"Right",
                   "score": float,
-                  "landmarks": [[x, y, z], ... 21 points ...]}, ...]}
+                  "landmarks":       [[x, y, z], ... 21 points ...],
+                  "world_landmarks": [[x, y, z], ... 21 points ...]}, ...]}
 
 Coordinates in `landmarks` are normalized [0, 1] over the input image:
 x is left-to-right, y is top-to-bottom, z is depth (negative = closer
 to camera). 21 points in MediaPipe Hands canonical order (wrist, then
 thumb..pinky, 4 points per finger).
+
+Coordinates in `world_landmarks` are metric (meters), with the origin
+at the hand's approximate geometric center. The C++ AirClickDetector
+reads `world_landmarks[8].z` (index fingertip depth) to detect the
+push-toward-camera right-click gesture, so this array MUST be present
+for that gesture to work. It may be an empty list if the active model
+build does not produce world landmarks.
 
 The server boots once, prints `{"status": "ready", "model": "..."}` and
 flushes, then loops until EOF on stdin (which signals the C++ parent
@@ -51,6 +59,99 @@ def log(msg: str) -> None:
     """Diagnostic lines go to stderr so they don't pollute the JSON
     protocol stream on stdout."""
     print(msg, file=sys.stderr, flush=True)
+
+
+# Upper bound on a single frame's pixel count. A corrupt or malicious
+# parent could send `width`/`height` that multiply out to tens of GB;
+# `os.read(0, length)` would then try to assemble a giant buffer and
+# OOM-kill the process. 33 megapixels comfortably covers 8K (7680x4320
+# = 33.2 MP rounds just under) plus normal webcam and 4K resolutions,
+# while rejecting absurd values long before any allocation.
+MAX_FRAME_PIXELS = 8192 * 4320  # ~35.4 MP
+MAX_FRAME_BYTES = MAX_FRAME_PIXELS * 4  # BGRA
+
+
+class ProtocolError(Exception):
+    """Raised when a metadata line violates the wire protocol. The
+    server turns this into a `{"status": "error", ...}` line and exits
+    with a non-zero code so the C++ parent can detect the failure and
+    respawn the subprocess."""
+
+
+def validate_meta(meta: dict) -> tuple[int, int, int]:
+    """Validate a decoded metadata dict and return (width, height,
+    length). Raises ProtocolError on any violation.
+
+    Guards, in order:
+      * required keys present and integer-convertible,
+      * width/height strictly positive,
+      * total pixels within MAX_FRAME_PIXELS (DoS / OOM guard),
+      * declared byte length equals width*height*4 (BGRA).
+    """
+    try:
+        width = int(meta["width"])
+        height = int(meta["height"])
+        length = int(meta["length"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProtocolError(f"bad/missing metadata field: {exc!r}") from exc
+    if width <= 0 or height <= 0:
+        raise ProtocolError(f"non-positive dimensions: {width}x{height}")
+    if width * height > MAX_FRAME_PIXELS:
+        raise ProtocolError(
+            f"frame too large: {width}x{height} "
+            f"({width * height} px > {MAX_FRAME_PIXELS} px cap)")
+    expected = width * height * 4  # BGRA = 4 bytes/pixel
+    if length != expected:
+        raise ProtocolError(f"length {length} != w*h*4 {expected}")
+    return width, height, length
+
+
+def build_response(result, width: int, height: int) -> dict:
+    """Build the per-frame JSON response dict from a MediaPipe
+    HandLandmarkerResult (or any object exposing the same fields).
+
+    Emits BOTH normalized `landmarks` (image space, [0,1]) and
+    `world_landmarks` (metric, origin at the hand's geometric center).
+    The world landmarks are required by the C++ AirClickDetector, which
+    reads `world[8].z` (index fingertip depth) for the push-to-
+    right-click gesture; without them that gesture can never fire.
+    """
+    hand_landmarks = getattr(result, "hand_landmarks", []) or []
+    world_landmarks = getattr(result, "hand_world_landmarks", []) or []
+    handedness = getattr(result, "handedness", []) or []
+
+    response = {
+        "hand_count": len(hand_landmarks),
+        "image_width": width,
+        "image_height": height,
+        "hands": [],
+    }
+    for i, hand_lms in enumerate(hand_landmarks):
+        score = 1.0
+        handedness_label = "Right"
+        if i < len(handedness):
+            cat = handedness[i]
+            # `category` is a Category proto; .category_name and
+            # .score are the public fields. The label is "Left" /
+            # "Right" (MediaPipe models mirror the actual hand).
+            handedness_label = cat[0].display_name or cat[0].category_name
+            score = float(cat[0].score)
+        landmarks_xy = [
+            [float(lm.x), float(lm.y), float(lm.z)] for lm in hand_lms
+        ]
+        world_xy = []
+        if i < len(world_landmarks):
+            world_xy = [
+                [float(lm.x), float(lm.y), float(lm.z)]
+                for lm in world_landmarks[i]
+            ]
+        response["hands"].append({
+            "handedness": handedness_label,
+            "score": score,
+            "landmarks": landmarks_xy,
+            "world_landmarks": world_xy,
+        })
+    return response
 
 
 def main() -> int:
@@ -163,15 +264,13 @@ def main() -> int:
             }), flush=True)
             return 8
 
-        width = int(meta["width"])
-        height = int(meta["height"])
-        length = int(meta["length"])
-        expected = width * height * 4  # BGRA = 4 bytes/pixel
-        if length != expected:
-            log(f"[hand_detector_server] length={length} != w*h*4={expected}")
+        try:
+            width, height, length = validate_meta(meta)
+        except ProtocolError as exc:
+            log(f"[hand_detector_server] {exc}")
             print(json.dumps({
                 "status": "error",
-                "message": f"length {length} != w*h*4 {expected}",
+                "message": str(exc),
             }), flush=True)
             return 9
 
@@ -184,42 +283,40 @@ def main() -> int:
                 return 10
             payload += chunk
 
-        # BGRA -> RGB numpy. CameraCapture delivers BGRA with row
-        # pitch == width * 4 (no padding); reshape works directly.
-        bgra = np.frombuffer(payload, dtype=np.uint8).reshape(
-            (height, width, 4))
-        rgb = bgra[:, :, [2, 1, 0]]  # BGR A -> RGB A (drop A)
+        # Everything from pixel reshape through response construction is
+        # wrapped so a single bad frame (corrupt pixels, a transient
+        # MediaPipe graph error, an unexpected result shape) degrades to
+        # a "zero hands" response instead of taking down the whole
+        # server. A crashed server freezes the cursor until the C++
+        # parent respawns it; a per-frame skip is invisible to the user.
+        try:
+            # BGRA -> RGB numpy. CameraCapture delivers BGRA with row
+            # pitch == width * 4 (no padding); reshape works directly.
+            # ascontiguousarray: MediaPipe's Image requires a contiguous
+            # buffer, and fancy-indexing the channel order yields a view.
+            bgra = np.frombuffer(payload, dtype=np.uint8).reshape(
+                (height, width, 4))
+            rgb = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])  # BGRA -> RGB
 
-        # ---- Run HandLandmarker ----
-        mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
-        result = landmarker.detect_for_video(mp_img, timestamp_ms)
-        timestamp_ms += 33  # ~30 fps cadence hint to the model
+            # ---- Run HandLandmarker ----
+            mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
+            result = landmarker.detect_for_video(mp_img, timestamp_ms)
+            timestamp_ms += 33  # ~30 fps cadence hint to the model
 
-        # ---- Build response ----
-        response = {
-            "hand_count": len(result.hand_landmarks),
-            "image_width": width,
-            "image_height": height,
-            "hands": [],
-        }
-        for i, hand_lms in enumerate(result.hand_landmarks):
-            score = 1.0
-            handedness_label = "Right"
-            if i < len(result.handedness):
-                cat = result.handedness[i]
-                # `category` is a Category proto; .category_name and
-                # .score are the public fields. The label is "Left" /
-                # "Right" (MediaPipe models mirror the actual hand).
-                handedness_label = cat[0].display_name or cat[0].category_name
-                score = float(cat[0].score)
-            landmarks_xy = [
-                [float(lm.x), float(lm.y), float(lm.z)] for lm in hand_lms
-            ]
-            response["hands"].append({
-                "handedness": handedness_label,
-                "score": score,
-                "landmarks": landmarks_xy,
-            })
+            # ---- Build response ----
+            response = build_response(result, width, height)
+        except Exception as exc:  # noqa: BLE001 - intentional catch-all
+            # Advance the timestamp on the skipped frame too so the
+            # model's VIDEO-mode smoothing doesn't see a time stall.
+            timestamp_ms += 33
+            log(f"[hand_detector_server] frame {frame_count} skipped: "
+                f"{exc!r}")
+            response = {
+                "hand_count": 0,
+                "image_width": width,
+                "image_height": height,
+                "hands": [],
+            }
 
         # Write one JSON line. Do NOT pretty-print — every byte costs
         # ~30 fps of parsing on the C++ side.

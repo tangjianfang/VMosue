@@ -213,6 +213,18 @@ std::string ResolveProjectRoot() {
 // post-handshake write probe and the per-frame Detect() call).
 bool ReadLine(HANDLE pipe, std::string& line, DWORD timeoutMs);
 
+// True if the child process handle refers to a still-running process.
+// A null handle or a non-STILL_ACTIVE exit code both count as dead.
+// Used to detect a crashed Python subprocess so Detect() can respawn
+// it instead of writing into a broken pipe forever (which only ever
+// returned empty landmarks, freezing the cursor).
+bool ChildAlive(HANDLE process) {
+  if (!process) return false;
+  DWORD code = 0;
+  if (!GetExitCodeProcess(process, &code)) return false;
+  return code == STILL_ACTIVE;
+}
+
 // Spawn `python <script> [--model <path>] [--num-hands N]`. Returns
 // the four HANDLEs needed for IPC. On any failure, the function logs
 // the error and returns false with all handles null.
@@ -505,12 +517,46 @@ Result<void> HandDetector::Init(const Config& cfg) {
   return Result<void>::Ok({});
 }
 
+bool HandDetector::TryRespawn() {
+  if (respawnCount_ >= kMaxRespawns) {
+    return false;  // give up until the next healthy frame resets us
+  }
+  ++respawnCount_;
+  VMOSUE_LOG_WARN(
+      "HandDetector: python subprocess not alive; respawn attempt {}/{}",
+      respawnCount_, kMaxRespawns);
+  // Tear down the dead child's handles (closing our pipe ends) before
+  // spawning a replacement so we don't leak HANDLEs across respawns.
+  if (child_) {
+    delete child_;
+    child_ = nullptr;
+  }
+  ChildHandles h;
+  if (!SpawnPythonDetector(cfg_.modelPath, cfg_.maxHands,
+                           cfg_.minHandConfidence, h)) {
+    VMOSUE_LOG_ERROR("HandDetector: respawn failed to spawn python child");
+    return false;
+  }
+  child_ = new ChildHandles(std::move(h));
+  VMOSUE_LOG_INFO("HandDetector: python subprocess respawned");
+  return true;
+}
+
 std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
   std::vector<HandLandmarks> out;
-  if (!initialized_ || !child_) return out;
+  if (!initialized_) return out;
   if (frame.empty() || frame.format != PixelFormat::BGR24 &&
       frame.format != PixelFormat::RGBA32) {
     return out;
+  }
+  // Detect a crashed subprocess and respawn it. Without this the
+  // first WriteFile below fails on a broken pipe, Detect() returns
+  // empty, and the cursor freezes permanently because nothing ever
+  // restarts the child. The respawn is bounded (kMaxRespawns per dead
+  // streak); a healthy round-trip at the end of this function resets
+  // the counter so a later, unrelated crash gets its full budget.
+  if (!child_ || !ChildAlive(child_->process)) {
+    if (!TryRespawn()) return out;
   }
 
   // CameraCapture emits BGRA frames; this is the path we expect. We
@@ -537,11 +583,21 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
   }
 
   // ---- Send metadata line ----
-  nlohmann::json meta;
-  meta["width"]  = static_cast<int>(frame.width);
-  meta["height"] = static_cast<int>(frame.height);
-  meta["length"] = static_cast<int>(bgra_bytes);
-  std::string meta_line = meta.dump() + "\n";
+  // Hand-build the fixed-shape JSON instead of constructing an
+  // nlohmann::json object and calling dump() every frame. The schema
+  // is three integer fields, so a couple of string appends are both
+  // correct and ~10x cheaper than the general serializer at the 30-60
+  // fps cadence this runs at. (The response parse stays on nlohmann —
+  // that payload is variable-shape and not worth hand-rolling.)
+  std::string meta_line;
+  meta_line.reserve(64);
+  meta_line += "{\"width\":";
+  meta_line += std::to_string(static_cast<int>(frame.width));
+  meta_line += ",\"height\":";
+  meta_line += std::to_string(static_cast<int>(frame.height));
+  meta_line += ",\"length\":";
+  meta_line += std::to_string(static_cast<long long>(bgra_bytes));
+  meta_line += "}\n";
   DWORD wrote = 0;
   if (!WriteFile(child_->stdin_write, meta_line.data(),
                  static_cast<DWORD>(meta_line.size()), &wrote, nullptr) ||
@@ -578,6 +634,10 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
     VMOSUE_LOG_ERROR("HandDetector: ReadFile(response) failed/timeout");
     return out;
   }
+  // Healthy round-trip: clear the respawn budget so a later, unrelated
+  // crash gets its full kMaxRespawns allowance rather than inheriting
+  // a count from a long-ago dead streak.
+  respawnCount_ = 0;
 
   // ---- Parse JSON response ----
   try {
@@ -641,6 +701,28 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
           hl.points[i].x = p.value("x", 0.0);
           hl.points[i].y = p.value("y", 0.0);
           hl.points[i].z = p.value("z", 0.0);
+        }
+      }
+      // World landmarks (metric coords). REQUIRED by AirClickDetector,
+      // which reads world[8].z (index fingertip depth) for the
+      // push-to-right-click gesture. Before v0.5 the server never
+      // emitted these, so `world` stayed all-zero and right-click
+      // could never fire in production (the unit test masked it by
+      // populating world directly). The server now sends a parallel
+      // "world_landmarks" array in the same [x,y,z] form.
+      const auto& wms = h.value("world_landmarks", nlohmann::json::array());
+      int wn = std::min<int>(static_cast<int>(wms.size()),
+                             HandLandmarks::kNumPoints);
+      for (int i = 0; i < wn; ++i) {
+        const auto& p = wms[i];
+        if (p.is_array() && p.size() >= 3) {
+          hl.world[i].x = p[0].get<double>();
+          hl.world[i].y = p[1].get<double>();
+          hl.world[i].z = p[2].get<double>();
+        } else if (p.is_object()) {
+          hl.world[i].x = p.value("x", 0.0);
+          hl.world[i].y = p.value("y", 0.0);
+          hl.world[i].z = p.value("z", 0.0);
         }
       }
       out.push_back(std::move(hl));

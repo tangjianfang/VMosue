@@ -12,7 +12,12 @@ void AirClickDetector::Reset() {
 }
 
 AirClickEvent AirClickDetector::OnLandmarks(const HandLandmarks& right, int64_t ts) {
-  if (right.world.empty()) return AirClickEvent::None;
+  // Note: the earlier `if (right.world.empty())` guard was a no-op —
+  // `world` is a fixed-size std::array, never empty. It was also
+  // unnecessary: an all-zero world frame (model produced no metric
+  // coords) can't spuriously fire, because the Approach test below is
+  // `index.z < wrist.z - thr`, i.e. `0 < -thr`, which is always false.
+  // So a degenerate frame simply keeps the detector Idle on its own.
   if (lastClickMs_.has_value() && (ts - *lastClickMs_) < cfg_.cooldownMs) {
     return AirClickEvent::None;
   }
@@ -44,9 +49,6 @@ AirClickEvent AirClickDetector::OnLandmarks(const HandLandmarks& right, int64_t 
       } else if (ts - phaseStartMs_ > cfg_.windowMs) {
         phase_ = Phase::Idle;
       }
-      break;
-    case Phase::Retreat:
-      phase_ = Phase::Idle;
       break;
   }
   return ev;

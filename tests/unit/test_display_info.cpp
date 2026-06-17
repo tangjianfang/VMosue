@@ -43,3 +43,14 @@ TEST(DisplayInfo, VirtualScreenContainsOrigin) {
   EXPECT_GT(v.right, 0);
   EXPECT_GT(v.bottom, 0);
 }
+
+// The double-click interval used to drive the pinch double-click
+// window must always be inside the clamped [200, 900] ms band,
+// whatever the machine's Windows mouse setting (or a corrupt registry
+// value) reports. Below 200 ms the gesture is unperformable; above
+// 900 ms unrelated pinches would merge.
+TEST(DisplayInfo, DoubleClickTimeIsClamped) {
+  int ms = DisplayInfo::SystemDoubleClickTimeMs();
+  EXPECT_GE(ms, 200);
+  EXPECT_LE(ms, 900);
+}

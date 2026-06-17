@@ -20,7 +20,11 @@ class AirClickDetector {
   void Reset();
 
  private:
-  enum class Phase { Idle, Approach, Retreat };
+  // Two-phase model: Idle waits for the index fingertip to push toward
+  // the camera (Approach); Approach waits for it to retract within the
+  // timing window (-> RightClick) or time out (-> Idle). The earlier
+  // `Retreat` enumerator was never entered and has been removed.
+  enum class Phase { Idle, Approach };
   Config cfg_;
   Phase phase_ = Phase::Idle;
   int64_t phaseStartMs_ = 0;
@@ -28,8 +32,6 @@ class AirClickDetector {
   // early-return when ts is small (cooldownMs check would skip the very
   // first frame at t < cooldownMs).
   std::optional<int64_t> lastClickMs_;
-  float baseZ_ = 0.0f;
-  bool palmStableAtStart_ = false;
 };
 
 }  // namespace vmosue

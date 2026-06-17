@@ -12,8 +12,9 @@ in a future release.
 | Left click | Right | Thumb to index pinch + release | Single click |
 | Double click | Right | Two quick pinches | Double click |
 | Left drag | Right | Pinch and hold + move | Drag |
+| Middle click | Right | Thumb to **middle** finger pinch + release | Middle (wheel) click |
 | Right click | Right | Move hand toward camera | Right click |
-| Scroll | Left | Two fingers close + move up/down | Wheel |
+| Scroll | Left | Two fingers close + move up/down/left/right | Wheel (vertical + horizontal) |
 | Pause / Resume | Left | Open hand held 1 s | Toggle pause |
 | Emergency stop | Either | Both hands open, or `Ctrl+Alt+G`, or hold `Esc` 1 s | Stop all input |
 
@@ -52,8 +53,11 @@ hand flat and relaxed for the smoothest tracking.
 ```
 
 The pinch detector measures the distance between the thumb tip and the
-index finger tip. When the distance drops below the **pinch threshold**
-(adjustable in **Settings**), a click fires.
+index finger tip. When the distance drops below the **pinch threshold**,
+a click fires. As of v0.5 the threshold is **adaptive**: VMosue observes
+the open/closed range of your pinch over a rolling window and derives
+the cut-off automatically — there is no slider to tune. The Settings
+window shows the currently-derived value as a live readout.
 
 ## Double click
 
@@ -72,8 +76,11 @@ index finger tip. When the distance drops below the **pinch threshold**
    t = 0   t < 300 ms
 ```
 
-Both pinches must happen within roughly 300 ms of each other. If the
-gap is too long, they register as two single clicks.
+Both pinches must happen within your **Windows double-click speed** of
+each other (Settings → Bluetooth & devices → Mouse → Additional mouse
+settings). VMosue reads this system setting so the gesture matches
+every other double-click on your machine. If the gap is too long, the
+pinches register as two single clicks.
 
 ## Left drag
 
@@ -94,6 +101,27 @@ gap is too long, they register as two single clicks.
 ```
 
 Release the pinch to drop whatever you are dragging.
+
+## Middle click
+
+**Hand:** right
+**Motion:** bring the **thumb** and **middle finger** together
+("pinch"), then release.
+**Action:** middle (mouse-wheel) click.
+
+```
+  Thumb ---\
+            \  -> pinch the MIDDLE finger (middle click)
+  Middle --/
+
+  Index stays out of the way
+```
+
+Middle click uses the same pinch mechanic as left click but targets
+the middle finger instead of the index finger. Left click always wins
+if both pinches are detected in the same instant, so a deliberate
+thumb-middle pinch is read as a middle click only when the index
+finger is not also pinched.
 
 ## Right click
 
@@ -125,9 +153,10 @@ do not), the right-click also fires on a quick backward flick.
 
 **Hand:** **left**
 **Motion:** bring the **index** and **middle** fingers close together
-(like a peace sign without the spread), then move the hand **up or
-down**.
-**Action:** mouse wheel events.
+(like a peace sign without the spread), then move the hand **up,
+down, left, or right**.
+**Action:** mouse wheel events — vertical motion sends wheel up/down,
+horizontal motion sends the horizontal wheel (tilt) left/right.
 
 ```
   Left hand:
