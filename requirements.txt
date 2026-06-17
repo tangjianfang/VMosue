@@ -1,0 +1,4 @@
+﻿# Runtime dependencies for scripts/hand_detector_server.py.
+# Installed by scripts/prepare-resources.ps1.
+mediapipe>=0.10
+numpy>=1.24

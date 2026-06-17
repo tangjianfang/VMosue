@@ -65,3 +65,52 @@ result:
   on the three new translation units to confirm they compile in isolation.
   See the commit message and the "Standalone parse-check" subsection of
   the task report for the exact command and observed output.
+
+## Preparing runtime resources
+
+`vmosue.exe` needs three things that are *not* tracked in git: the
+`hand_landmarker.task` model, and the `mediapipe` + `numpy` Python
+packages that `scripts/hand_detector_server.py` imports. Run the helper
+before building so CMake's resource-sync step finds the model:
+
+```powershell
+.\scripts\prepare-resources.ps1
+```
+
+It downloads the model into `resources/models/`, installs the
+dependencies from `requirements.txt`, and verifies everything is in
+place (exit code 0 = ready). Useful flags: `-SkipModel`, `-SkipPython`,
+`-Python py`, and `-BuildDir build` (mirror `scripts/` + `resources/`
+next to a binary when not building through CMake). The model is
+re-downloaded only if missing or truncated, so the script is safe to
+re-run.
+
+## Building the full app: Visual Studio ATL requirement
+
+`src/capture/CameraCapture.h` includes `<atlbase.h>` (`CComPtr` for the
+Media Foundation COM interfaces), so building the `vmosue` executable
+requires the **C++ ATL** Visual Studio component. The unit-test target
+does not link the capture/UI libraries, so tests build without ATL —
+but the full app does not.
+
+If CMake selects a Visual Studio instance that lacks ATL (a common case:
+the standalone **Build Tools** instance under
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`), the
+build fails with:
+
+```
+CameraCapture.h: error C1083: Cannot open include file: 'atlbase.h'
+```
+
+Fix it one of two ways:
+
+1. **Point CMake at an instance that has ATL** (e.g. a full Community /
+   Professional install) when configuring:
+   ```powershell
+   cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
+     -DCMAKE_GENERATOR_INSTANCE="C:\Program Files\Microsoft Visual Studio\2022\Community" `
+     -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+   ```
+2. **Install the ATL component into the instance CMake picks** — in the
+   Visual Studio Installer, add "C++ ATL for latest v143 build tools
+   (x86 & x64)".

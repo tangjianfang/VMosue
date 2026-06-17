@@ -70,9 +70,18 @@ contents.
 ## Build
 
 ```powershell
-.\scripts\bootstrap.ps1
+.\scripts\bootstrap.ps1            # one-time: clone + bootstrap vcpkg
+.\scripts\prepare-resources.ps1    # download the ML model + install Python deps
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 cmake --build build --config Release
 ```
+
+`prepare-resources.ps1` downloads `hand_landmarker.task` into
+`resources/models/`, installs the Python dependencies
+(`mediapipe`, `numpy`) listed in `requirements.txt`, and verifies the
+app's runtime resources are in place. Run it before the first build so
+the model is present. See [build notes](docs/build-notes.md) for the
+ATL / Visual Studio component requirement.
 
 ## License
 
