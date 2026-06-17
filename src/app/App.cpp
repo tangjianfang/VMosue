@@ -393,6 +393,25 @@ int App::Run() {
   return 0;
 }
 
+void App::NotifyThreadError(const char* loopName) {
+  // Only the first dying thread sets the flag and drives shutdown.
+  bool expected = false;
+  if (!threadError_.compare_exchange_strong(expected, true)) return;
+  VMOSUE_LOG_ERROR("Worker thread '{}' crashed; triggering graceful shutdown",
+                   loopName);
+  // Post WM_QUIT to the main thread's message queue so GetMessageW
+  // returns and the main Run() loop falls through to Shutdown().
+  // This is safe to call from a worker thread (PostQuitMessage uses
+  // the thread that created the message loop; we need to target the
+  // main thread's queue instead, so we use PostThreadMessage).
+  if (trayMsgWnd_) {
+    PostMessageW(trayMsgWnd_, WM_CLOSE, 0, 0);
+  }
+  // Belt-and-suspenders: also flip running_ so any tight-loop path
+  // in the main thread that polls it will also exit.
+  running_.store(false);
+}
+
 void App::Shutdown() {
   // Idempotent: the very first Shutdown flips running_ to false and
   // joins everything; subsequent calls early-out.
@@ -550,8 +569,10 @@ void App::captureLoop() {
     }
   } catch (const std::exception& e) {
     VMOSUE_LOG_ERROR("captureLoop exception: {}", e.what());
+    NotifyThreadError("captureLoop");
   } catch (...) {
     VMOSUE_LOG_ERROR("captureLoop unknown exception");
+    NotifyThreadError("captureLoop");
   }
 }
 
@@ -764,8 +785,10 @@ void App::inferenceLoop() {
     }
   } catch (const std::exception& e) {
     VMOSUE_LOG_ERROR("inferenceLoop exception: {}", e.what());
+    NotifyThreadError("inferenceLoop");
   } catch (...) {
     VMOSUE_LOG_ERROR("inferenceLoop unknown exception");
+    NotifyThreadError("inferenceLoop");
   }
 }
 
@@ -898,8 +921,10 @@ void App::stateMachineLoop() {
     }
   } catch (const std::exception& e) {
     VMOSUE_LOG_ERROR("stateMachineLoop exception: {}", e.what());
+    NotifyThreadError("stateMachineLoop");
   } catch (...) {
     VMOSUE_LOG_ERROR("stateMachineLoop unknown exception");
+    NotifyThreadError("stateMachineLoop");
   }
 
   // After the loop exits (emergency stop, Shutdown, or exception)

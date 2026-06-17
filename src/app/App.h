@@ -74,6 +74,19 @@ class App {
   static PerfMode CurrentPerfMode();
 
   std::atomic<bool> running_{false};
+
+  // Set by a worker thread when it exits due to an unhandled exception.
+  // The main Run() loop polls this flag and triggers a graceful
+  // Shutdown() so the app stops and surfaces an error instead of
+  // silently freezing with a non-functional cursor. Starts at false;
+  // once set it is never cleared (one worker dying is enough to stop).
+  std::atomic<bool> threadError_{false};
+
+  // Called from the catch blocks of worker threads. Sets threadError_
+  // and initiates an orderly shutdown so the user gets an observable
+  // failure rather than a frozen cursor.
+  void NotifyThreadError(const char* loopName);
+
   std::thread captureT_;
   std::thread inferenceT_;
   std::thread smT_;

@@ -141,6 +141,7 @@ Result<void> CameraCapture::Init(const Config& cfg) {
   cfg_ = cfg;
   HRESULT hr = MFStartup(MF_VERSION);
   if (FAILED(hr)) return Result<void>::Err("MFStartup failed");
+  mfStarted_ = true;
 
   auto devices = enumerateCameras();
   if (cfg_.deviceIndex >= devices.size()) {
@@ -190,7 +191,15 @@ void CameraCapture::Start() {
 void CameraCapture::Stop() {
   if (!running_.exchange(false)) return;
   if (thread_.joinable()) thread_.join();
-  MFShutdown();
+  // Only Shutdown if we were the one who called MFStartup in Init().
+  // An unconditional MFShutdown() would decrement the MF reference count
+  // even when Init() never succeeded (or was never called), which could
+  // undercount and corrupt the MF runtime state for other callers in the
+  // same process (e.g. EnumerateDevices running on the UI thread).
+  if (mfStarted_) {
+    mfStarted_ = false;
+    MFShutdown();
+  }
 }
 
 void CameraCapture::captureLoop() {
@@ -241,10 +250,23 @@ void CameraCapture::captureLoop() {
     }
     noSampleStreak = 0;
     CComPtr<IMFMediaBuffer> buffer;
-    sample->ConvertToContiguousBuffer(&buffer);
+    hr = sample->ConvertToContiguousBuffer(&buffer);
+    if (FAILED(hr) || !buffer) {
+      // This can happen transiently when the MF pipeline is shutting
+      // down or the device glitches. Skip the frame rather than
+      // dereferencing a null buffer pointer (UB / crash).
+      VMOSUE_LOG_WARN("CameraCapture: ConvertToContiguousBuffer failed "
+                      "(hr=0x{:x}); skipping frame", static_cast<unsigned>(hr));
+      continue;
+    }
     BYTE* data = nullptr;
     DWORD length = 0;
-    buffer->Lock(&data, nullptr, &length);
+    hr = buffer->Lock(&data, nullptr, &length);
+    if (FAILED(hr) || !data) {
+      VMOSUE_LOG_WARN("CameraCapture: buffer->Lock failed "
+                      "(hr=0x{:x}); skipping frame", static_cast<unsigned>(hr));
+      continue;
+    }
     {
       // We write directly into latestFrame_.data under the mutex
       // rather than building a local Frame and moving it. The

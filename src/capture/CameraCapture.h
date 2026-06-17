@@ -67,6 +67,11 @@ class CameraCapture {
   std::mutex frameMutex_;
   std::condition_variable frameCv_;
   bool hasFrame_ = false;
+  // True iff Init() successfully called MFStartup and we are therefore
+  // responsible for calling MFShutdown() in Stop(). EnumerateDevices()
+  // manages its own MFStartup/Shutdown pair and does not affect this
+  // flag.
+  bool mfStarted_ = false;
   CComPtr<IMFSourceReader> reader_;
 };
 
