@@ -1,0 +1,8 @@
+{
+  "description": "Index-tip world-z push toward camera then retract within the window -> rightClick.",
+  "frames": [
+    {"ts_ms": 0,   "right": {"x_base": 0.50, "y_mcp": 0.50, "push_z": 0.00}},
+    {"ts_ms": 50,  "right": {"x_base": 0.50, "y_mcp": 0.50, "push_z": -0.05}},
+    {"ts_ms": 150, "right": {"x_base": 0.50, "y_mcp": 0.50, "push_z": 0.00}}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Right-hand index-MCP walks rightward; expect cursorDx>0 and no clicks.",
+  "frames": [
+    {"ts_ms": 0,   "right": {"x_base": 0.30, "y_mcp": 0.50}},
+    {"ts_ms": 50,  "right": {"x_base": 0.34, "y_mcp": 0.50}},
+    {"ts_ms": 100, "right": {"x_base": 0.38, "y_mcp": 0.50}},
+    {"ts_ms": 150, "right": {"x_base": 0.42, "y_mcp": 0.50}},
+    {"ts_ms": 200, "right": {"x_base": 0.46, "y_mcp": 0.50}}
+  ]
+}

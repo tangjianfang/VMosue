@@ -28,6 +28,7 @@ add_executable(vmosue_tests
   unit/test_overlay_geometry.cpp
   unit/test_adaptive.cpp
   integration/test_pipeline_e2e.cpp
+  integration/test_action_map.cpp
   # Watchdog is a standalone utility compiled into the vmosue
   # executable (it lives in src/app/ alongside App.cpp). Since
   # vmosue_tests does not link to the vmosue executable, we compile

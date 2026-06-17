@@ -1,0 +1,10 @@
+{
+  "description": "Open left hand held > holdMs -> state toggles to Paused.",
+  "frames": [
+    {"ts_ms": 0,    "left": {"open": true}},
+    {"ts_ms": 300,  "left": {"open": true}},
+    {"ts_ms": 600,  "left": {"open": true}},
+    {"ts_ms": 900,  "left": {"open": true}},
+    {"ts_ms": 1200, "left": {"open": true}}
+  ]
+}

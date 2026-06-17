@@ -1,0 +1,10 @@
+{
+  "description": "Left two-finger scroll moving right -> hWheel != 0.",
+  "frames": [
+    {"ts_ms": 0,   "left": {"x_base": 0.30, "scroll_active": true, "scroll_dx": 0.000}},
+    {"ts_ms": 50,  "left": {"x_base": 0.30, "scroll_active": true, "scroll_dx": 0.003}},
+    {"ts_ms": 100, "left": {"x_base": 0.30, "scroll_active": true, "scroll_dx": 0.006}},
+    {"ts_ms": 150, "left": {"x_base": 0.30, "scroll_active": true, "scroll_dx": 0.009}},
+    {"ts_ms": 200, "left": {"x_base": 0.30, "scroll_active": true, "scroll_dx": 0.012}}
+  ]
+}

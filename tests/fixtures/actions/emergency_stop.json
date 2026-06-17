@@ -1,0 +1,9 @@
+{
+  "description": "Both hands open > twoHandOpenHoldMs -> EmergencyStopped + safeRelease.",
+  "frames": [
+    {"ts_ms": 0,   "left": {"open": true}, "right": {"open": true}},
+    {"ts_ms": 200, "left": {"open": true}, "right": {"open": true}},
+    {"ts_ms": 400, "left": {"open": true}, "right": {"open": true}},
+    {"ts_ms": 600, "left": {"open": true}, "right": {"open": true}}
+  ]
+}

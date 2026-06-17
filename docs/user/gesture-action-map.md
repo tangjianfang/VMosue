@@ -11,7 +11,7 @@ Sources: `src/gesture/*` detectors, `src/gesture/GestureStateMachine.cpp`,
 
 | # | Gesture | Hand | Trigger (landmarks / semantics) | ActionSet field | Injection | Must NOT also trigger | Fixture |
 |---|---------|------|----------------------------------|-----------------|-----------|------------------------|---------|
-| 1 | Cursor move | Right | Index-MCP (5) translation × sensitivity, past adaptive dead-zone | `cursorDx`, `cursorDy` | mouse move (relative) | any click | `cursor_move.json` |
+| 1 | Cursor move | Right | Index-MCP (5) translation × sensitivity, past adaptive dead-zone. **X is negated** (mirrored-camera convention: hand right → cursor left) | `cursorDx` (–=left), `cursorDy` (+= down) | mouse move (relative) | any click | `cursor_move.json` |
 | 2 | Left click | Right | dist(4,8) < pinch threshold then > release threshold within the double-click window | `leftClick` | LMB down+up | drag, middle, right | `left_click.json` |
 | 3 | Double click | Right | Two qualifying pinch-releases within the system double-click window (`GetDoubleClickTime`, 200–900 ms) | `leftDoubleClick` | LMB ×2 | single click held | `double_click.json` |
 | 4 | Left drag | Right | dist(4,8) < pinch held > `holdForDragMs`, then move, then release | `leftDown` → `cursorDx/Dy` → `leftUp` | LMB down, move, up | single/double click | `left_drag.json` |

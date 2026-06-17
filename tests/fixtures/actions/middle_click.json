@@ -1,0 +1,8 @@
+{
+  "description": "Thumb-middle pinch then release -> middleClick (no left pinch).",
+  "frames": [
+    {"ts_ms": 0,   "right": {"x_base": 0.50, "y_mcp": 0.50, "middle_pinch": false}},
+    {"ts_ms": 50,  "right": {"x_base": 0.50, "y_mcp": 0.50, "middle_pinch": true}},
+    {"ts_ms": 100, "right": {"x_base": 0.50, "y_mcp": 0.50, "middle_pinch": false}}
+  ]
+}
