@@ -1,0 +1,7 @@
+# Release artifacts are NOT committed — they're built on demand
+# from the latest release commit by `release\\build.ps1`. Listing
+# them here keeps `git status` clean for the release/ folder while
+# preserving RELEASE-NOTES.md as the in-repo source of truth.
+v0.6.2-minimal/
+v0.6.2-portable/
+*.zip

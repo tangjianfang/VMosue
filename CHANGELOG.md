@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-18
+
+### Added
+
+- **Anti-phantom, two-layer protection.** `HandStabilityFilter` drops any
+  handedness whose score has not been above the adaptive floor for at
+  least 5 consecutive frames (~167 ms at 30 fps); `DwellGate` further
+  requires every one-shot action to be continuously held for `dwellMs`
+  (production default 2500 ms) before the release event is allowed to
+  fire. End-to-end: 20 synthetic phantom bursts → 0 clicks; real
+  sustained pinch → 1 click on release (`PhantomE2E.*`).
+- **Per-action dwell preview.** Top-center overlay renders
+  `About to: Left click 1.2s` in 36 pt bold yellow text with a 520×14
+  progress bar, plus a 200 ms white flash on commit. Cursor still moves
+  during the dwell so the user has live feedback that the system sees
+  their hand.
+- **First-hand settle-in grace.** New 1500 ms window after the user's
+  hand first appears in which the cursor moves but every button event
+  is suppressed. Overlay shows `Calibrating... 1.2s` and flashes
+  `✓ Ready` when the window ends.
+- **Action-list help window** (`ActionListWindow`, F1 hotkey or tray
+  menu `Action list`) lists the 7 gestures → actions mapping. Auto-shows
+  ~2 s after launch when `Config::showActionListOnLaunch` is true.
+- **Tutorial step 7** (action reference table). 7-step tutorial now ends
+  with a summary of every gesture → action mapping.
+- **`test_phantom_e2e.cpp`** — new end-to-end regression suite covering
+  phantom bursts, dwell-met fires, gap-in-burst cancels dwell, and
+  sustained-real-pinch produces exactly one click.
+- **Tighter adaptive `MinHandScore`** (bias 0.05 → 0.16, floor 0.3) and
+  adaptive pinch/release thresholds reduce cold-start false positives
+  without hurting real-gesture acceptance (≥95 %, tested).
+
+### Fixed
+
+- **`DwellGate` now reads `*Held` signals, not release events.**
+  Architectural bug from v0.6 rc1: `ClickDetector` only emits `LeftClick`
+  on the release frame (one frame), so `DwellGate.Process` saw a
+  `startMs = releaseFrameTs` and immediately disarmed on the next
+  frame. The dwell could never elapse, so `cfg.dwellMs > 0` would have
+  made every click in production silently never fire. The new model
+  feeds the gate the *gesture-held* booleans (`leftPinchHeld`,
+  `middlePinchHeld`, `rightPushHeld`) read from new
+  `ClickDetector::IsLeftPinching()` / `IsMiddlePinching()` and
+  `AirClickDetector::IsApproaching()` getters, and only commits on the
+  release frame after the slot has been continuously held for
+  `dwellMs`. Also: `OnLandmarks` no longer early-returns on no-hand
+  frames without running `DwellGate.Process(empty, ts)`, so 30-frame
+  no-hand gaps between 5-frame phantom bursts now correctly disarm the
+  phantom-armed slot (previously 19/20 phantom bursts fired).
+
+## [Unreleased]
+
 ### Added
 
 - **Adaptive parameters (v0.5).** Every environment- or signal-derived
