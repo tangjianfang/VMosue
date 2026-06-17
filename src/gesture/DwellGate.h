@@ -68,12 +68,13 @@ class DwellGate {
     // How long an action must be continuously asserted before it
     // fires. 0 disables the gate entirely (every action fires on
     // the first frame it is true), which is the contract the
-    // legacy test_action_map fixtures depend on. 500ms is the
-    // production default — long enough to reject 1-2 frame
-    // phantom hands, short enough that a deliberate click is
-    // not painful. Tests override this with 0 (or with 1000+
-    // ms in the dwell-specific cases).
-    int dwellMs = 500;
+    // legacy test_action_map fixtures depend on. 2500ms is the
+    // production default — the user explicitly asked for "2-3
+    // seconds" of calibration time so they can comfortably watch
+    // the on-screen "About to: ..." preview count down. Tests
+    // override this with 0 (or with 1000+ ms in the
+    // dwell-specific cases).
+    int dwellMs = 2500;
     // After firing, suppress re-firing of the same action for this
     // many ms. Prevents a sustained pinch (e.g. the user is
     // "trying to click" and holds for 3s) from emitting multiple

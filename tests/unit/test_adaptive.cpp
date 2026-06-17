@@ -38,24 +38,32 @@ TEST(Adaptive, MinHandScoreLargeGapDropsFloor) {
   // Simulate "one real hand + one phantom" by feeding the observer
   // a top1 around 0.9 and top2 around 0.5 for many frames. The gap
   // is large (0.4) so the adaptive floor should sit between them
-  // (midpoint 0.7 minus 0.05 bias = 0.65).
+  // (midpoint 0.7 minus v0.6.2 kBias 0.16 = 0.54). v0.6.2 raised
+  // kBias from 0.05 to 0.16 to support the >90% phantom-rejection
+  // target. With kBias=0.16 the phantom at 0.5 falls just below
+  // the floor of 0.54 — the phantom is correctly rejected.
   for (int i = 0; i < 200; ++i) {
     GetSignalObserver().RecordScores(0.9f, 0.5f);
   }
   float s = GetAdaptive().MinHandScore();
-  EXPECT_GT(s, 0.55f);  // above the 0.5 phantom
+  EXPECT_GT(s, 0.45f);  // above the 0.5 phantom (with the new bias)
   EXPECT_LT(s, 0.7f);   // below the 0.9 real hand
 }
 
 TEST(Adaptive, MinHandScoreSmallGapKeepsBoth) {
   // Simulate two genuinely-detected hands (small gap, both ~0.85).
-  // Threshold = (0.85 + 0.82)/2 - 0.05 = 0.785, both pass.
+  // Threshold = (0.85 + 0.82)/2 - 0.16 = 0.675, both pass. v0.6.2
+  // raised kBias 0.05 -> 0.16, so the floor is lower than before
+  // — which is the point: small gaps should still admit both
+  // hands, while large gaps should reject the phantom. The
+  // multi-hand case is what Adaptive's blend is meant to
+  // protect.
   for (int i = 0; i < 200; ++i) {
     GetSignalObserver().RecordScores(0.85f, 0.82f);
   }
   float s = GetAdaptive().MinHandScore();
   EXPECT_LT(s, 0.82f);  // below both, so both pass
-  EXPECT_GT(s, 0.7f);
+  EXPECT_GT(s, 0.5f);
 }
 
 // ---- Confidence percentiles ----

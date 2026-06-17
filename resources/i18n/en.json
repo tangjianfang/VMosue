@@ -1,5 +1,6 @@
 {
   "app.name": "VMosue",
+  "app.nameWithCount": "VMosue — 3 gestures (F1 for list)",
   "tray.pause": "Pause",
   "tray.resume": "Resume",
   "tray.settings": "Settings",

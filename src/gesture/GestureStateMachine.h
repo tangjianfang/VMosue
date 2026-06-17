@@ -38,14 +38,25 @@ class GestureStateMachine {
     // `pending_`. 0 disables the gate (legacy behavior, used by
     // unit tests and the action-map integration fixtures). The
     // production App's `Init` call is responsible for setting this
-    // to the user's configured value (default 500ms) so the
+    // to the user's configured value (default 2500ms) so the
     // test-suite's default-init path keeps the old "fire
-    // immediately" contract. 500ms is the production default —
-    // long enough to reject 1-2 frame phantom hands, short enough
-    // that a deliberate click is not painful. Capped at 5000ms
-    // to keep the preview UI from looking broken.
+    // immediately" contract. 2500ms is the production default —
+    // the user explicitly asked for "2-3 seconds" of calibration
+    // so they can comfortably watch the on-screen countdown and
+    // decide whether to commit. Capped at 5000ms to keep the
+    // preview UI from looking broken.
     int dwellMs = 0;
     int dwellCooldownMs = 400;
+    // v0.6.2: "first hand seen" grace period. When a hand first
+    // appears (or re-appears after a 1+ second absence) we suppress
+    // all action publication for this many ms. The user reported
+    // "现在我随便一动，它就瞎乱点" — the moment a hand enters
+    // frame, micro-movements of the fingers during settling (e.g.
+    // getting a comfortable pinch position) would fire a click.
+    // 1500ms is long enough for the user to settle into a neutral
+    // pose, short enough that the user doesn't feel the app is
+    // "dead on startup". Disabled when 0.
+    int firstHandGraceMs = 1500;
   };
 
   Result<void> Init(const Config&);
@@ -90,6 +101,18 @@ class GestureStateMachine {
   // would otherwise fail to ever trip the gesture.
   bool twoHandOpenActive_ = false;
   int64_t twoHandOpenStartMs_ = 0;
+  // v0.6.2: track the most recent "hand visible" timestamp. When a
+  // hand re-appears after > 1s of absence, the grace timer is
+  // re-armed so the user gets the same "settle in" period every
+  // time they bring their hand back into frame. A bool tracks
+  // "was a hand visible LAST frame?" rather than comparing ts
+  // values, because ts is wall-clock-derived and the gap between
+  // frames is small (~33ms) but the gap between sessions can be
+  // hours; a simple bool + "first frame after a long absence"
+  // heuristic is more robust than timestamp arithmetic.
+  int64_t lastHandSeenMs_ = 0;
+  int64_t graceStartMs_ = 0;
+  bool handSeenLastFrame_ = false;
 };
 
 }  // namespace vmosue

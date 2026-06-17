@@ -397,16 +397,18 @@ int App::Run() {
                                 std::chrono::seconds(3);
   bool tutorialAutoShown = !Config::Get().Data().showTutorialOnLaunch;
 
-  // v0.6.1: auto-show the action-list ("help") window ~5s after
-  // launch, slightly AFTER the tutorial's 3s deadline so the two
-  // don't stack on top of each other. The user reported being
-  // unable to operate ANY gesture; without an automatic nudge to
-  // the 3-action list, the first launch would just sit silent and
-  // the user would assume the app is broken. We also gate on
+  // v0.6.2: auto-show the action-list ("help") window ~2s after
+  // launch, AHEAD of the tutorial (3s). The user reported
+  // "随便一动它就瞎乱点" / "我不知道有哪些动作" — the help
+  // window is the more critical of the two for a first-time
+  // user, because it tells them WHICH gestures are supported
+  // and (in the footer) which are NOT. We also gate on
   // Config::showActionListOnLaunch (default true) so a returning
-  // user can opt out without recompiling.
+  // user can opt out without recompiling. The 2s delay gives
+  // the system tray icon a moment to register before the help
+  // window steals the foreground.
   const auto helpLaunchAt = std::chrono::steady_clock::now() +
-                            std::chrono::seconds(5);
+                            std::chrono::seconds(2);
   bool helpAutoShown = !Config::Get().Data().showActionListOnLaunch;
 
   // Main thread pumps messages for ALL top-level windows on this

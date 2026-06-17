@@ -43,16 +43,21 @@ class HandStabilityFilter {
   // *not* observed.
   static constexpr int kHandednessCount = 2;
 
-  // kStabilityFrames is the magic number. Empirically 3 frames at
-  // 30Hz = 100ms catches every phantom the user reported while
-  // adding no visible latency to real-hand tracking. A real hand
-  // that drops for 1-2 frames and re-appears (e.g. brief
-  // occlusion) does not get re-counted from zero — instead the
-  // counter monotonically increments, so a hand seen for 4 frames,
-  // occluded 1 frame, then 2 more frames is at 6 consecutive
-  // frames (the brief gap is forgiven). This is the difference
-  // between "passes filter" and "trust score history".
-  static constexpr int kStabilityFrames = 3;
+  // kStabilityFrames is the magic number. v0.6.2: raised 3 -> 5
+  // (167ms at 30Hz) for the >90% phantom-rejection target the user
+  // asked for. Empirically a phantom hand at 30Hz is visible for
+  // 1-3 frames before it either gets re-classified (and jumps to a
+  // different landmark cluster) or drops below the score floor.
+  // 5 frames outlasts every phantom we have observed on a typical
+  // webcam while still adding no visible latency to real-hand
+  // tracking — the user only feels a "first click" delay of ~167ms,
+  // which is dwarfed by the 2.5s DwellGate calibration anyway.
+  // A real hand that drops for 1-2 frames and re-appears (e.g.
+  // brief occlusion) does not get re-counted from zero — instead
+  // the counter monotonically increments, so a hand seen for 4
+  // frames, occluded 1 frame, then 2 more frames is at 6
+  // consecutive frames (the brief gap is forgiven).
+  static constexpr int kStabilityFrames = 5;
 
   // True if this handedness has been continuously above floor for
   // at least kStabilityFrames. Mutates state.

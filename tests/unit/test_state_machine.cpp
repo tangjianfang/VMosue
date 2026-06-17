@@ -71,7 +71,15 @@ static HandLandmarks rightHandPush(float indexZ, float wristZ) {
 // must be untouched.
 TEST(StateMachine, EmitsRightClickOnCleanPush) {
   GestureStateMachine sm;
-  sm.Init({});
+  // v0.6.2: disable the "first hand seen" grace gate for this
+  // test. The test runs the simulation starting at ts=1000ms,
+  // which is well inside the 1500ms default grace window — the
+  // push-gesture right-click would be suppressed. Disabling
+  // firstHandGraceMs isolates the right-click detector from
+  // the grace gate, which is what this test is about.
+  GestureStateMachine::Config cfg;
+  cfg.firstHandGraceMs = 0;
+  sm.Init(cfg);
   sm.Resume();
   sm.OnLandmarks({rightHandPush(0.0f, 0.0f)}, 1000, 1.0/30.0);
   sm.OnLandmarks({rightHandPush(-0.05f, 0.0f)}, 1050, 1.0/30.0);
@@ -199,4 +207,90 @@ TEST(StateMachineTwoHandOpen, DoesNotRefireWhileEmergencyStopped) {
   sm.OnLandmarks(both, 1200, 1.0/30.0);
   sm.OnLandmarks(both, 2000, 1.0/30.0);
   EXPECT_EQ(sm.State(), vmosue::GlobalState::EmergencyStopped);
+}
+
+// v0.6.2: "first hand seen" grace period. The user reported
+// "现在我随便一动，它就瞎乱点" — micro-movements of the fingers
+// while the user settles into a comfortable pinch pose on
+// first appearance used to fire a click within ~50ms. The
+// grace gate suppresses every action publication for
+// cfg.firstHandGraceMs after a hand first appears (or
+// re-appears after >= 1s of absence), while still letting the
+// cursor move so the user has visual feedback that the system
+// sees their hand.
+//
+// To make the test fast, we set firstHandGraceMs = 200 and
+// dwellMs = 0 (immediate-fire legacy). The test is therefore
+// fully deterministic on the ms timestamp alone.
+
+TEST(StateMachine, FirstHandGraceSuppressesClickDuringSettleIn) {
+  GestureStateMachine sm;
+  GestureStateMachine::Config cfg;
+  cfg.firstHandGraceMs = 200;  // short window for the test
+  cfg.dwellMs = 0;             // no dwell delay, isolate the grace gate
+  cfg.handednessRight = true;
+  sm.Init(cfg);
+
+  // Frame 0: hand appears, immediately tries to pinch (the
+  // "settling" pose the user described). Click MUST NOT fire.
+  std::vector<vmosue::HandLandmarks> right{rightHandWithPinch(0.02f)};
+  sm.OnLandmarks(right, /*ts=*/0, 1.0/30.0);
+  auto a = sm.ConsumeActions();
+  EXPECT_FALSE(a.leftClick)
+      << "click during grace window — this is the user's bug";
+
+  // Frames 1-5 (0-150ms in 33ms steps): still inside the
+  // 200ms grace window. Clicks must continue to be
+  // suppressed even though the pinch is held.
+  for (int ts = 33; ts <= 165; ts += 33) {
+    sm.OnLandmarks(right, ts, 1.0/30.0);
+  }
+  a = sm.ConsumeActions();
+  EXPECT_FALSE(a.leftClick)
+      << "click within grace window at ts=165";
+
+  // Frame at 200ms: grace just ended. Pinch held for
+  // ~200ms — release it now to see if a click fires.
+  // Use the detector's "release" branch: lift the pinch.
+  std::vector<vmosue::HandLandmarks> released{rightHandWithPinch(0.10f)};
+  sm.OnLandmarks(released, /*ts=*/200, 1.0/30.0);
+  a = sm.ConsumeActions();
+  // The grace gate only suppresses during the window. After
+  // 200ms, the gesture is allowed to fire normally. So a
+  // release after the grace window SHOULD fire a click.
+  EXPECT_TRUE(a.leftClick)
+      << "post-grace release must fire — the grace gate is a "
+         "settle-in window, not a permanent block";
+}
+
+TEST(StateMachine, FirstHandGraceReArmsOnLongAbsence) {
+  // If the user takes their hand out for >1s and brings it
+  // back, the grace gate must re-arm so a fresh settle-in
+  // window applies. Without this the second session would
+  // feel jumpy in exactly the way the first session did.
+  GestureStateMachine sm;
+  GestureStateMachine::Config cfg;
+  cfg.firstHandGraceMs = 200;
+  cfg.dwellMs = 0;
+  sm.Init(cfg);
+
+  std::vector<vmosue::HandLandmarks> right{rightHandWithPinch(0.02f)};
+  std::vector<vmosue::HandLandmarks> released{rightHandWithPinch(0.10f)};
+
+  // First session: settle + release normally.
+  sm.OnLandmarks(right, 0, 1.0/30.0);
+  sm.OnLandmarks(released, 200, 1.0/30.0);
+  auto a = sm.ConsumeActions();
+  EXPECT_TRUE(a.leftClick) << "first session click";
+
+  // 2s gap (well over the 1s re-arm threshold).
+  sm.OnLandmarks({}, 2200, 1.0/30.0);
+
+  // Second session: hand re-appears at 2233ms with a pinch.
+  // Grace must re-arm, so this click MUST NOT fire.
+  sm.OnLandmarks(right, 2233, 1.0/30.0);
+  a = sm.ConsumeActions();
+  EXPECT_FALSE(a.leftClick)
+      << "grace did not re-arm after 2s absence — second session "
+         "feels as jumpy as the first";
 }

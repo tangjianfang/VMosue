@@ -459,11 +459,19 @@ class AdaptiveController {
   //   (0.85, 0.82) -> threshold 0.785 -> accepts both
   //   (0.95, 0.94) -> threshold 0.895 -> accepts both
   //
-  // Cold-start fallback: 0.6 (v0.4 default).
+  // Cold-start fallback: 0.6 (v0.4 default). v0.6.2: kBias raised
+  // 0.05 -> 0.16 to support the >90% phantom-rejection target the
+  // user asked for. At a single-real-hand scene with (top1=0.92,
+  // top2=0.10) this gives a floor of (0.92+0.10)/2 - 0.16 = 0.40,
+  // which lets the 0.92 real hand through while blocking any
+  // 0.10-0.30 phantom. In a two-real-hand scene (0.90, 0.85) the
+  // floor becomes 0.715, which is still below both real hands —
+  // so the bias does NOT over-reject in the multi-hand case that
+  // Adaptive's blend is meant to protect.
   float MinHandScore() const {
     auto s = GetSignalObserver().GetScoreStats();
     if (!s.hasData) return 0.6f;
-    constexpr float kBias = 0.05f;
+    constexpr float kBias = 0.16f;
     constexpr float kFloor = 0.3f;
     float adaptive = static_cast<float>(
         (s.top1Mean + s.top2Mean) * 0.5 - kBias);

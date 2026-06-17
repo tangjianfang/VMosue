@@ -73,7 +73,16 @@ bool TrayIcon::Init(HWND hwndMessage, const MenuCallbacks& cb) {
   // exists; for now IDI_APPLICATION keeps the binary footprint small.
   nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
   if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_WINLOGO);
-  tooltip_ = I18n::Get().TW("app.name");
+  // v0.6.2: tooltip now advertises the gesture count + F1 hint
+  // so a user hovering the tray icon immediately learns "there
+  // are 3 things this app can do, and there's a key for the
+  // list". Without this, the only way to discover the action
+  // list was to right-click the tray, which the user kept
+  // missing.
+  tooltip_ = I18n::Get().TW("app.nameWithCount");
+  if (tooltip_.empty() || tooltip_ == L"app.nameWithCount") {
+    tooltip_ = I18n::Get().TW("app.name");  // fallback if i18n key missing
+  }
   CopyWide(nid.szTip, sizeof(nid.szTip) / sizeof(wchar_t), tooltip_.c_str());
 
   added_ = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;

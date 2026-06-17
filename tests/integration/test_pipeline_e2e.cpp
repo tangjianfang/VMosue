@@ -356,7 +356,15 @@ TEST_F(PipelineE2E, CursorMovesDuringFrames0Through4) {
 
 TEST_F(PipelineE2E, ClickFiresDuringFrames5Through8) {
   GestureStateMachine sm;
-  sm.Init({});
+  // v0.6.2: disable the "first hand seen" grace gate. The fixture
+  // is sliced starting at frame 5 (~165ms in) which is well
+  // inside the 1500ms default grace window — the click would
+  // be suppressed. The grace gate is tested separately in
+  // test_state_machine.cpp::FirstHandGraceSuppresses*; this
+  // test is about the click detector, so we isolate it.
+  GestureStateMachine::Config cfg;
+  cfg.firstHandGraceMs = 0;
+  sm.Init(cfg);
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{9});
   std::vector<FrameSpec> phase(frames.begin() + 5, frames.begin() + 9);
@@ -370,7 +378,11 @@ TEST_F(PipelineE2E, ClickFiresDuringFrames5Through8) {
 
 TEST_F(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
   GestureStateMachine sm;
-  sm.Init({});
+  // See ClickFiresDuringFrames5Through8 — disable the grace
+  // gate so the drag start/end is not suppressed.
+  GestureStateMachine::Config cfg;
+  cfg.firstHandGraceMs = 0;
+  sm.Init(cfg);
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{16});
   std::vector<FrameSpec> phase(frames.begin() + 9, frames.begin() + 16);

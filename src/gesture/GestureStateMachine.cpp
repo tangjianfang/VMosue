@@ -64,6 +64,13 @@ void GestureStateMachine::Reset() {
   dwell_.Reset();
   twoHandOpenActive_ = false;
   twoHandOpenStartMs_ = 0;
+  // v0.6.2: reset the "first hand seen" grace timer so a Pause
+  // / Resume cycle re-arms the settle-in window. The user
+  // reported that resuming from pause still felt jumpy; the
+  // grace period is the cleanest fix.
+  lastHandSeenMs_ = 0;
+  graceStartMs_ = 0;
+  handSeenLastFrame_ = false;
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
   // Default-init leaves cursorX at INT_MIN (sentinel = "no target"),
@@ -76,6 +83,36 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // (e.g. rate-limited cursor smoothing in the state machine itself). The
   // click and air-click detectors are time-window based and use the
   // millisecond timestamp `ts` directly.
+
+  // v0.6.2: "first hand seen" grace period. Tracks whether a hand
+  // was visible LAST frame and re-arms the settle-in window every
+  // time the user takes their hand out for >1s and brings it
+  // back. The first 1500ms after a fresh detection produces zero
+  // action publication — no clicks, no scroll, no drag, no
+  // pause-toggle. The cursor still moves (so the user has visual
+  // feedback that the system sees their hand) but no buttons
+  // fire. This is the cleanest fix for the user's "我随便一动它
+  // 就瞎乱点" complaint: the micro-movements of getting a
+  // comfortable pinch pose on first appearance used to fire a
+  // click within ~50ms.
+  bool handVisible = !hands.empty();
+  if (handVisible) {
+    int64_t sinceLast = lastHandSeenMs_ == 0
+                            ? INT64_MAX
+                            : (ts - lastHandSeenMs_);
+    // Re-arm grace whenever the hand has been gone for >=1000ms
+    // (a real absence, not a single-frame detection drop).
+    if (!handSeenLastFrame_ && sinceLast >= 1000) {
+      graceStartMs_ = ts;
+    }
+    lastHandSeenMs_ = ts;
+    handSeenLastFrame_ = true;
+  } else {
+    handSeenLastFrame_ = false;
+  }
+  bool inGrace = (cfg_.firstHandGraceMs > 0) &&
+                 (graceStartMs_ != 0) &&
+                 ((ts - graceStartMs_) < cfg_.firstHandGraceMs);
 
   // Find the "other" hand (opposite of configured handedness) up front.
   // Task 16 lays the groundwork; Task 19 wires the ScrollDetector that
@@ -271,6 +308,24 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // out the other side. Cursor, wheel, and sustained LMB
   // (leftDown/leftUp for drag) pass through unchanged.
   ActionSet gated = dwell_.Process(local, ts);
+
+  // v0.6.2: "first hand seen" grace gate. During the settle-in
+  // window we let the cursor move (so the user sees feedback that
+  // the system sees their hand) but suppress every button
+  // publication and every wheel tick. The hand can wave, settle,
+  // pinch, do whatever — none of it fires. This is the
+  // "settle-in" UX the user asked for in response to "随便一动就
+  // 瞎乱点".
+  if (inGrace) {
+    gated.leftClick = false;
+    gated.leftDoubleClick = false;
+    gated.leftDown = false;
+    gated.leftUp = false;
+    gated.rightClick = false;
+    gated.middleClick = false;
+    gated.wheel = 0;
+    gated.hWheel = 0;
+  }
   std::lock_guard<std::mutex> lk(actionsMu_);
   // Cursor target is an absolute screen position, not a delta. The
   // latest frame always wins: a slow consumer polling N frames of

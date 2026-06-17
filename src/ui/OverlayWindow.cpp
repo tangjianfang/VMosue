@@ -300,10 +300,13 @@ static const char* DwellActionI18nKey(int actionId) {
 // Render a single line of text via the D2D-GDI interop path.
 // Identical to DebugWindow::DrawLine; duplicated here so
 // OverlayWindow.cpp does not need to drag in the debug window
-// headers.
+// headers. v0.6.2: optional `fontHeight` (negative, as GDI
+// convention dictates) — the dwell preview wants a much larger
+// font than the wrist-anchored debug overlay used.
 static void DrawOverlayText(ID2D1RenderTarget* rt,
                             ID2D1SolidColorBrush* brush,
-                            float x, float y, const std::wstring& s) {
+                            float x, float y, const std::wstring& s,
+                            int fontHeight = -18) {
   if (!rt || !brush || s.empty()) return;
   ID2D1GdiInteropRenderTarget* interop = nullptr;
   if (FAILED(rt->QueryInterface(&interop))) return;
@@ -319,11 +322,25 @@ static void DrawOverlayText(ID2D1RenderTarget* rt,
         static_cast<int>(c.g * 255.0f),
         static_cast<int>(c.b * 255.0f)));
     SetBkMode(hdc, TRANSPARENT);
+    // v0.6.2: pick a heavier font size for the dwell preview.
+    // We use a per-call HFONT (created and destroyed here) rather
+    // than caching one in the OverlayWindow because the font size
+    // is now a parameter and GDI font handles are not safe to
+    // share across threads. The cost is a CreateFontW + DeleteObject
+    // per frame, both ~microsecond-scale, well under our render
+    // budget.
+    HFONT font = CreateFontW(fontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE,
+                             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    HGDIOBJ prev = SelectObject(hdc, font);
     TextOutW(hdc,
              static_cast<int>(x),
              static_cast<int>(y),
              s.c_str(),
              static_cast<int>(s.size()));
+    SelectObject(hdc, prev);
+    DeleteObject(font);
     interop->ReleaseDC(nullptr);
   }
   interop->Release();
@@ -375,27 +392,58 @@ void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
   // looking at the screen, not their hand. A fixed top-center
   // position is always in the user's eye-line and large enough
   // to read at a glance.
+  //
+  // v0.6.2: scaled up further. The 360x6 layout was still easy
+  // to miss when the user was focused on something else on
+  // screen. Now: 520x14 progress bar, 36pt bold Segoe UI text,
+  // positioned 80px from the top of the virtual desktop. The
+  // final 200ms flashes a bright white border to make the
+  // imminent fire unmissable.
+  const float barW = 520.0f;
+  const float barH = 14.0f;
   float textX = static_cast<float>(virtX_) +
-                (static_cast<float>(virtW_) - 360.0f) / 2.0f;
-  float textY = static_cast<float>(virtY_) + 60.0f;
+                (static_cast<float>(virtW_) - barW) / 2.0f;
+  float textY = static_cast<float>(virtY_) + 80.0f;
 
   ID2D1SolidColorBrush* textBrush =
       brushes_[static_cast<int>(BrushTier::Text)];
-  DrawOverlayText(rt, textBrush, textX, textY, text);
-
-  // Progress bar: 360px wide (matches the centered text x-extent
-  // above), 6px tall, sits just below the text.
-  const float barW = 360.0f;
-  const float barH = 6.0f;
-  float barX = textX;
-  float barY = textY + 28.0f;
+  // 36pt bold — large enough to read at 1080p from a chair.
+  DrawOverlayText(rt, textBrush, textX, textY, text, /*fontHeight=*/-36);
 
   ID2D1SolidColorBrush* pending =
       brushes_[static_cast<int>(BrushTier::Pending)];
   if (!pending) return;
 
+  // Bar is 44px below the text baseline (text is 36pt ≈ 48px tall).
+  float barX = textX;
+  float barY = textY + 56.0f;
+
+  // v0.6.2: final-200ms flash. When the action is about to
+  // commit (dwellRemainingMs <= 200), the bar gets a 4px white
+  // border that pulses each frame. This is the
+  // "un-missable" affordance: even if the user is looking at
+  // something else, peripheral vision picks up the flashing
+  // border and gives them a chance to release before the
+  // action fires. The wall-clock-derived ms count is the
+  // canonical signal here; we deliberately do NOT use
+  // f.dwellProgress (which is float) for the time check
+  // because 1.0 - progress is not the same as remaining/total
+  // when the adaptive controller blends dwell values.
+  bool flashing = f.dwellRemainingMs <= 200.0f;
+
   D2D1_RECT_F bg = D2D1::RectF(barX, barY, barX + barW, barY + barH);
-  rt->DrawRectangle(bg, pending, 1.0f);
+  rt->DrawRectangle(bg, pending, 2.0f);
+  if (flashing) {
+    // Bright white flash — 4px border that extends outside the
+    // bar's normal stroke. We draw it as a slightly inset
+    // rectangle so it sits on top of the yellow border. We
+    // reuse the Text brush (already white) rather than
+    // creating a per-flash brush, since D2D requires an
+    // ID2D1Brush* for DrawRectangle (no D2D1_COLOR_F overload).
+    D2D1_RECT_F flash = D2D1::RectF(barX - 4.0f, barY - 4.0f,
+                                    barX + barW + 4.0f, barY + barH + 4.0f);
+    rt->DrawRectangle(flash, textBrush, 4.0f);
+  }
 
   float progress = f.dwellProgress;
   if (progress < 0.0f) progress = 0.0f;

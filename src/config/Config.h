@@ -30,11 +30,12 @@ struct AppConfig {
   // asserted for this many ms before it fires. 0 disables the
   // gate (every action fires on the first frame it is true) —
   // the legacy behavior the test_action_map fixtures depend
-  // on. 500ms is the production default — long enough to
-  // reject 1-2 frame phantom hands, short enough that a
-  // deliberate click is not painful. The SettingsWindow lets
-  // the user pick anything in [0, 3000] ms.
-  int  dwellTimeMs = 500;
+  // on. 2500ms is the production default — long enough that
+  // the user can comfortably see the on-screen "About to: ..."
+  // preview count down and decide whether to commit or release
+  // (the user explicitly asked for "2-3 seconds"). The
+  // SettingsWindow lets the user pick anything in [0, 5000] ms.
+  int  dwellTimeMs = 2500;
   // v0.6: anti-interference strength. Drives the per-handedness
   // stability threshold (HandStabilityFilter) and the Python
   // min-hand-confidence argument. Valid values: "off", "low",
