@@ -114,3 +114,28 @@ Fix it one of two ways:
 2. **Install the ATL component into the instance CMake picks** — in the
    Visual Studio Installer, add "C++ ATL for latest v143 build tools
    (x86 & x64)".
+
+## Measuring per-frame latency
+
+A Release build logs a latency line once per second to the VMosue log
+(`%LOCALAPPDATA%\VMosue\logs\`):
+
+```
+latency ms (P50/P95):  capture 0.4/0.9  ipc_rtt 35.2/61.0  gesture 0.1/0.2
+```
+
+- `capture` — frame acquisition + NV12→BGRA in the capture loop.
+- `ipc_rtt` — the Python detector round-trip (`HandDetector::Detect`):
+  pipe write of the BGRA frame + MediaPipe inference + response read.
+  This is the suspected dominant cost; if its P95 >> 33 ms (one frame at
+  30 fps), it confirms the IPC rewrite (ROADMAP D2/D3) is justified.
+- `gesture` — state machine + input injection.
+
+**How to use:** run the app, perform gestures for ~30 s, then read the
+steady-state P50/P95 from the log. Optimize the largest first. After any
+latency change, re-run the `ActionMap.*` fixture tests to confirm no
+recognition regression:
+
+```powershell
+ctest --test-dir build -C Release -R ActionMap --output-on-failure
+```

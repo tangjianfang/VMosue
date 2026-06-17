@@ -21,6 +21,20 @@
 namespace vmosue {
 
 namespace {
+
+// Emit one log line with P50/P95 for each instrumented latency span.
+// Called at ~1 Hz from inferenceLoop. The numbers help rank which part
+// of the pipeline dominates: if lat_ipc_rtt P95 >> lat_gesture P95,
+// the IPC pipe/Python inference is the bottleneck (see ROADMAP D2/D3).
+static void LogLatencyP50P95() {
+  VMOSUE_LOG_INFO(
+      "latency ms (P50/P95):  capture {:.1f}/{:.1f}  "
+      "ipc_rtt {:.1f}/{:.1f}  gesture {:.1f}/{:.1f}",
+      ProfileGuard::P50Ms("lat_capture"),  ProfileGuard::P95Ms("lat_capture"),
+      ProfileGuard::P50Ms("lat_ipc_rtt"),  ProfileGuard::P95Ms("lat_ipc_rtt"),
+      ProfileGuard::P50Ms("lat_gesture"),  ProfileGuard::P95Ms("lat_gesture"));
+}
+
 // Static window class registration for the tray message-only window.
 // Done in the .cpp TU so the class name and WndProc are local. The
 // class is registered once (the first time App::Run is called) and
@@ -496,7 +510,12 @@ void App::captureLoop() {
       const int liveFps  = currentFps_.load(std::memory_order_relaxed);
       const int targetFps = std::max(1, std::min(mode.captureFps, liveFps));
 
-      if (cam_.TryGetLatestFrame(f)) {
+      // Instrument frame-acquisition cost (NV12->BGRA + mutex).
+      // PROFILE_GUARD_DISABLED records samples without emitting warn
+      // spam; the P50/P95 are read by inferenceLoop's 1Hz log line.
+      bool gotFrame;
+      { PROFILE_GUARD_DISABLED("lat_capture"); gotFrame = cam_.TryGetLatestFrame(f); }
+      if (gotFrame) {
         // SPSC: push() only fails if the queue is full, in which case
         // we drop the new frame. The capture thread runs at the
         // configured captureFps, the inference thread pulls at
@@ -598,7 +617,12 @@ void App::inferenceLoop() {
         std::vector<HandLandmarks> hands;
         {
           PROFILE_GUARD("inference");
-          hands = detector_.Detect(inferenceFrame);
+          // Narrow span for just the IPC round-trip (pipe write of the
+          // BGRA frame + Python MediaPipe inference + response read).
+          // This is the suspected dominant latency source; comparing its
+          // P95 vs the full "inference" P95 isolates how much smoothing
+          // contributes on top of the raw network hop.
+          { PROFILE_GUARD_DISABLED("lat_ipc_rtt"); hands = detector_.Detect(inferenceFrame); }
           // Use the perf-mode inference rate for the smoother's
           // time step (dt = 1/fps). This keeps the One-Euro
           // filter tuned to the actual cadence of incoming
@@ -700,6 +724,18 @@ void App::inferenceLoop() {
           }
         }
 
+        // Latency telemetry: log P50/P95 for the three instrumented
+        // spans at ~1 Hz so the log stays readable. The static counter
+        // persists across loop iterations; it is local to this thread
+        // and never accessed from another thread.
+        {
+          static int64_t lastLatencyLogMs = 0;
+          if (now_ms - lastLatencyLogMs >= 1000) {
+            LogLatencyP50P95();
+            lastLatencyLogMs = now_ms;
+          }
+        }
+
         // v0.3 (Task 36): push landmarks directly to the debug
         // window. See the matching comment in captureLoop for why
         // we no longer use the App-side mirror queue. PushLandmarks
@@ -745,7 +781,8 @@ void App::stateMachineLoop() {
         double dt = std::chrono::duration<double>(now - last).count();
         last = now;
 
-        sm_.OnLandmarks(hands, NowMicros() / 1000, dt);
+        // Instrument gesture-pipeline cost (state machine + injection).
+        { PROFILE_GUARD_DISABLED("lat_gesture"); sm_.OnLandmarks(hands, NowMicros() / 1000, dt); }
         auto acts = sm_.ConsumeActions();
         auto& inj = InputInjector::Get();
 
