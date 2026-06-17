@@ -95,6 +95,25 @@ class ProfileGuard {
     return copy[idx];
   }
 
+  // Median (P50) over the rolling window. 0.0 if empty.
+  // Uses nth_element (O(N) average) — only the median element needs to
+  // reach its sorted position.
+  static double P50Ms(const char* name) {
+    std::lock_guard<std::mutex> lk(Mu());
+    auto& v = Series(name);
+    if (v.empty()) return 0.0;
+    std::vector<double> copy = v;
+    const size_t idx = copy.size() / 2;
+    std::nth_element(copy.begin(), copy.begin() + idx, copy.end());
+    return copy[idx];
+  }
+
+  // Test-only: inject a known sample so percentile math can be verified
+  // without relying on timing-dependent dtor measurements.
+  static void RecordSampleForTest(const char* name, double ms) {
+    RecordSample(name, ms);
+  }
+
   // Resets the rolling window. Mostly useful for tests.
   static void Reset(const char* name) {
     std::lock_guard<std::mutex> lk(Mu());

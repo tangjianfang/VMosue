@@ -113,4 +113,14 @@ TEST_F(ProfileGuardTest, ConstructorStoresThreshold) {
   }
 }
 
+TEST(ProfileGuard, P50IsMedianOfWindow) {
+  using vmosue::ProfileGuard;
+  ProfileGuard::Reset("p50test");
+  // Inject 9 deterministic samples (1..9); median is 5.
+  for (int i = 1; i <= 9; ++i)
+    ProfileGuard::RecordSampleForTest("p50test", double(i));
+  EXPECT_DOUBLE_EQ(ProfileGuard::P50Ms("p50test"), 5.0);
+  EXPECT_DOUBLE_EQ(ProfileGuard::P95Ms("p50test"), 9.0);
+}
+
 }  // namespace
