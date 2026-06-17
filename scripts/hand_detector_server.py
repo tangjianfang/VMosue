@@ -232,7 +232,23 @@ def main() -> int:
     frame_count = 0
     t_start = time.monotonic()
     # VIDEO mode requires a monotonically increasing timestamp in ms.
+    # Earlier versions used `timestamp_ms += 33` (a fixed 30Hz cadence
+    # hint) regardless of the actual frame interval. That misleads
+    # MediaPipe's internal temporal smoothing whenever the camera
+    # delivers faster or slower than 30Hz (e.g. 60Hz capture, or the
+    # App's idle-down-shift to 10Hz). With a fixed cadence, two
+    # frames that arrive 5ms apart are reported to MediaPipe as 33ms
+    # apart, which biases the smoother's derivative estimate and
+    # inflates apparent gesture latency.
+    #
+    # We use time.monotonic() to stamp the actual wall-clock time of
+    # each frame. The first frame's timestamp is anchored to 0 so a
+    # frame that arrives at t=2.3s gets timestamp=2300 — well within
+    # the range MediaPipe's smoothing is designed for. The monoton
+    # icity invariant required by VIDEO mode is preserved because
+    # time.monotonic() never goes backwards.
     timestamp_ms = 0
+    last_ts_ms = 0
 
     while True:
         # ---- Read metadata line (raw fd, 1 byte at a time) ----
@@ -299,16 +315,28 @@ def main() -> int:
             rgb = np.ascontiguousarray(bgra[:, :, [2, 1, 0]])  # BGRA -> RGB
 
             # ---- Run HandLandmarker ----
+            # Stamp the actual wall-clock time so MediaPipe's VIDEO
+            # mode smoothing tracks real frame timing. The monotonic
+            # clock is converted to ms; we clamp at last_ts_ms to
+            # guarantee strict monotonicity even on a slightly
+            # backwards-stepping monotonic source (extremely rare but
+            # documented for some Windows clock sources).
+            now_ms = int(time.monotonic() * 1000.0)
+            timestamp_ms = max(now_ms, last_ts_ms + 1)
+            last_ts_ms = timestamp_ms
             mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
             result = landmarker.detect_for_video(mp_img, timestamp_ms)
-            timestamp_ms += 33  # ~30 fps cadence hint to the model
 
             # ---- Build response ----
             response = build_response(result, width, height)
         except Exception as exc:  # noqa: BLE001 - intentional catch-all
             # Advance the timestamp on the skipped frame too so the
             # model's VIDEO-mode smoothing doesn't see a time stall.
-            timestamp_ms += 33
+            # We use wall-clock here (not a fixed 33) to keep the
+            # smoothing consistent with the success path.
+            now_ms = int(time.monotonic() * 1000.0)
+            timestamp_ms = max(now_ms, last_ts_ms + 1)
+            last_ts_ms = timestamp_ms
             log(f"[hand_detector_server] frame {frame_count} skipped: "
                 f"{exc!r}")
             response = {

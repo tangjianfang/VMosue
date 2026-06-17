@@ -34,6 +34,8 @@ LRESULT CALLBACK OverlayWindow::WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       self->virtY_ = GetSystemMetrics(SM_YVIRTUALSCREEN);
       self->virtW_ = GetSystemMetrics(SM_CXVIRTUALSCREEN);
       self->virtH_ = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+      GetSignalObserver().RecordVirtualDesktop(self->virtX_, self->virtY_,
+                                               self->virtW_, self->virtH_);
       SetWindowPos(h, HWND_TOP,
                    self->virtX_, self->virtY_,
                    self->virtW_, self->virtH_,
@@ -63,8 +65,10 @@ bool OverlayWindow::Init(HWND hwndParent) {
   // so CursorController and any other "screen-size dependent"
   // tunable can read it via GetAdaptive().DesktopPixels(). The
   // previous hard-coded 1920x1080 made cursor motion wrong on 4K
-  // and multi-monitor setups.
-  GetSignalObserver().RecordVirtualDesktop(virtW_, virtH_);
+  // and multi-monitor setups. We also cache the origin (virtX,
+  // virtY) so multi-monitor rigs where the primary is not at
+  // (0, 0) still get correct SetCursorPos targets.
+  GetSignalObserver().RecordVirtualDesktop(virtX_, virtY_, virtW_, virtH_);
   hwnd_ = CreateWindowEx(
       WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
       kClassName, L"", WS_POPUP,

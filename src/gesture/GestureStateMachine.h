@@ -16,7 +16,21 @@ namespace vmosue {
 enum class GlobalState { Active, Paused, EmergencyStopped };
 
 struct ActionSet {
-  int cursorDx = 0, cursorDy = 0;
+  // Absolute target cursor position in virtual-screen pixels.
+  // Set every frame by CursorController from the primary hand's
+  // MCP pivot (landmark 5); consumed by InputInjector::SetCursorPos,
+  // which forwards to Win32 SetCursorPos. The video frame's [0,1]
+  // range maps 1:1 to the virtual desktop — see CursorController for
+  // the selfie-mirror flip on X.
+  //
+  // Sentinel: cursorX == INT_MIN means "no movement this frame" (hand
+  // not detected, paused, or skipped). cursorY is undefined in that
+  // case and must not be consumed. Intentionally NOT additive across
+  // frames — the latest absolute position always wins (a slow consumer
+  // pulling N frames worth of pending cursorX should jump to the
+  // freshest target, not accumulate deltas which don't exist here).
+  int cursorX = INT_MIN;
+  int cursorY = INT_MIN;
   bool leftClick = false, leftDoubleClick = false;
   bool leftDown = false, leftUp = false;
   bool rightClick = false;

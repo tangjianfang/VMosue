@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <exception>
 #include <string>
 #include <thread>
@@ -651,11 +652,25 @@ void App::inferenceLoop() {
           // P95 vs the full "inference" P95 isolates how much smoothing
           // contributes on top of the raw network hop.
           { ::vmosue::ProfileGuard _pg_ipc("lat_ipc_rtt",true,1e9); hands = detector_.Detect(inferenceFrame); }
-          // Use the perf-mode inference rate for the smoother's
-          // time step (dt = 1/fps). This keeps the One-Euro
-          // filter tuned to the actual cadence of incoming
-          // landmarks.
-          const double dt = 1.0 / std::max(1, mode.inferenceFps);
+          // v0.5: Use the ACTUAL elapsed wall-clock time between
+          // frames for the One-Euro filter's dt, not the nominal
+          // 1/inferenceFps. The IPC round-trip varies 20-80ms in
+          // practice (Python MediaPipe inference time on CPU is
+          // non-deterministic depending on hand presence and
+          // background activity), so a constant cadence
+          // overestimates the derivative on slow frames and
+          // underestimates it on fast frames — both produce
+          // visible cursor jitter. Floor dt at 1ms so a
+          // wall-clock hiccup can't drive the smoother's
+          // smoothingFactor to a degenerate value.
+          const auto now_smooth = clock::now();
+          const double wallDt = std::chrono::duration<double>(
+              now_smooth - last_smooth_ts_).count();
+          last_smooth_ts_ = now_smooth;
+          double dt = wallDt;
+          if (dt <= 0.0) dt = 1.0 / 30.0;   // monotonic regression guard
+          if (dt < 0.001) dt = 0.001;        // floor at 1ms
+          if (dt > 0.5)   dt = 0.5;          // ceiling at 500ms (pause/resume)
 
           // Empty-hand short-circuit. When no hand was detected,
           // there is nothing to smooth and no wrist motion to
@@ -802,10 +817,18 @@ void App::inferenceLoop() {
 void App::stateMachineLoop() {
   try {
     auto last = std::chrono::steady_clock::now();
+    // Hoist the hands vector OUTSIDE the loop so we don't allocate a
+    // new control block every iteration. landmarkQ_.pop() calls
+    // vector::clear() + std::move-into-empty, which reuses the
+    // existing capacity — zero allocs after the first call. (The
+    // original code allocated a fresh vector every loop iteration,
+    // including the idle iterations where landmarkQ_.pop() failed;
+    // that was ~30 mallocs/sec of trivial work but it trashed the
+    // cache and showed up as small jitter in lat_gesture P95.)
+    std::vector<HandLandmarks> hands;
     while (running_.load()) {
       // Task 24: see captureLoop().
       Watchdog::Get().Heartbeat(std::this_thread::get_id());
-      std::vector<HandLandmarks> hands;
       if (landmarkQ_.pop(hands)) {
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - last).count();
@@ -868,12 +891,16 @@ void App::stateMachineLoop() {
         if (acts.rightClick) inj.RightClick();
         if (acts.middleClick) inj.MiddleClick();
 
-        // Spec bug fix #1: the state machine publishes cursor deltas
-        // (cursorDx, cursorDy) and the original spec consumed them
-        // into local variables but never injected them. This is the
-        // whole point of the gesture-driven mouse, so do it here.
-        if (acts.cursorDx != 0 || acts.cursorDy != 0) {
-          inj.MoveCursor(acts.cursorDx, acts.cursorDy);
+        // Cursor target is now an absolute screen position (cursorX,
+        // cursorY in virtual-desktop pixels), written every frame by
+        // CursorController from the primary hand's MCP pivot. Forward
+        // to SetCursorPos — a single User32 syscall, much cheaper than
+        // the v0.4 SendInput(MOVE) relative path. The INT_MIN sentinel
+        // on cursorX means "no target this frame" (hand lost, paused,
+        // emergency-stopped) — leave the OS cursor where it is in that
+        // case rather than yanking it to an arbitrary point.
+        if (acts.cursorX != INT_MIN) {
+          inj.SetCursorPos(acts.cursorX, acts.cursorY);
         }
 
         // Spec bug fix #2: ActionSet has a `wheel` field that was
@@ -893,20 +920,20 @@ void App::stateMachineLoop() {
         if (debug_ && (acts.leftClick || acts.leftDoubleClick ||
                        acts.leftDown || acts.leftUp || acts.rightClick ||
                        acts.middleClick ||
-                       acts.cursorDx != 0 || acts.cursorDy != 0 ||
+                       acts.cursorX != INT_MIN ||
                        acts.wheel != 0 || acts.hWheel != 0 ||
                        acts.safeRelease)) {
           wchar_t buf[160];
           swprintf_s(buf,
               L"sm: click=%d dclick=%d down=%d up=%d rclick=%d mclick=%d "
-              L"dx=%d dy=%d wheel=%d hwheel=%d",
+              L"cx=%d cy=%d wheel=%d hwheel=%d",
               acts.leftClick ? 1 : 0,
               acts.leftDoubleClick ? 1 : 0,
               acts.leftDown ? 1 : 0,
               acts.leftUp ? 1 : 0,
               acts.rightClick ? 1 : 0,
               acts.middleClick ? 1 : 0,
-              acts.cursorDx, acts.cursorDy, acts.wheel, acts.hWheel);
+              acts.cursorX, acts.cursorY, acts.wheel, acts.hWheel);
           debug_->PushLog(buf);
         }
       } else {

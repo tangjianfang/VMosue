@@ -2,88 +2,79 @@
 #include "gesture/GestureStateMachine.h"  // for ActionSet (complete type)
 #include "util/Adaptive.h"
 #include "util/Logger.h"
+
+#include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace vmosue {
 
-void CursorController::SetConfig(const Config& c) { cfg_ = c; }
-void CursorController::Reset() { initialized_ = false; prevPivot_.reset(); }
+void CursorController::SetConfig(const Config&) {}
+void CursorController::Reset() {}
 
 void CursorController::OnLandmarks(const HandLandmarks& right, ActionSet& actions, double dt) {
-  (void)dt;  // Currently no time-aware smoothing; the dead zone + sensitivity
-             // suffice. Kept in the signature to allow future velocity-based
-             // filtering (e.g. frame-rate independent dead zones).
+  (void)dt;
   if (right.points.empty()) return;
-  // Index finger MCP is landmark 5; we'll track that to avoid cursor jump on click.
+  // Index finger MCP (landmark 5). MCP rather than fingertip so a
+  // pinch (which snaps the tip sharply) doesn't yank the cursor.
   const auto& p = right.points[5];
-  if (!initialized_) {
-    prevPivot_ = p;
-    initialized_ = true;
+  // Drop the frame cleanly on non-finite input so the static_cast<int>
+  // below is well-defined and we don't propagate NaN/Inf into the OS
+  // cursor.
+  if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
     return;
   }
 
-  // v0.5: dead-zone and desktop-pixel resolution come from the
-  // adaptive controller, not the user config. The dead zone is
-  // computed from observed cursor stillness noise (3-sigma rule);
-  // the desktop pixel size is read from the observer cache that
-  // OverlayWindow::Init populated. The Config struct still
-  // carries the v0.4 defaults for tests, but production paths
-  // ignore cfg_.deadZoneNorm and the hard-coded 1920x1080.
-  const float dz = GetAdaptive().CursorDeadZone();
+  // Pull the virtual-desktop size from the adaptive observer (cached
+  // once on OverlayWindow::Init). Floor at 1920x1080 and cap at 32767
+  // in either axis so the multiplication below can never overflow an
+  // int on exotic multi-monitor configurations. (DesktopPixels() in
+  // Adaptive.h already does the floor; the cap is defense-in-depth.)
+  // The origin (virtX, virtY) is also read from the observer so a
+  // multi-monitor rig where the primary monitor is not at (0, 0)
+  // still produces the correct absolute SetCursorPos target.
   auto [virtW, virtH] = GetAdaptive().DesktopPixels();
-  // Defensive clamp. DesktopPixels() already floors at (1920,1080),
-  // but an unusual multi-monitor virtual desktop could report a very
-  // large extent; cap it so `dx * virtW` below can't overflow a
-  // 32-bit int when sensitivity is high. 32767 covers any real screen
-  // arrangement (the Win32 virtual desktop itself is bounded near
-  // there) while keeping the float->int product comfortably in range.
+  auto [virtX, virtY] = GetSignalObserver().VirtualDesktopOrigin();
   constexpr int kMaxDim = 32767;
-  if (virtW <= 0 || virtW > kMaxDim) virtW = (virtW <= 0) ? 1920 : kMaxDim;
-  if (virtH <= 0 || virtH > kMaxDim) virtH = (virtH <= 0) ? 1080 : kMaxDim;
+  if (virtW <= 0) virtW = 1920;
+  if (virtH <= 0) virtH = 1080;
+  if (virtW > kMaxDim) virtW = kMaxDim;
+  if (virtH > kMaxDim) virtH = kMaxDim;
 
-  // WebCam frames are natively mirrored (selfie convention), so the
-  // MediaPipe landmark x grows toward the user's actual right hand
-  // but the user perceives motion in the opposite direction — moving
-  // their hand to screen-left produces a decreasing landmark x, yet
-  // the cursor would drift screen-right if we just multiplied by +1.
-  // Negate dx so the cursor follows the hand as the user sees it.
-  // Y is left untouched because webcam vertical is not mirrored.
-  float dx = -(p.x - prevPivot_->x) * cfg_.sensitivityX;
-  float dy = (p.y - prevPivot_->y) * cfg_.sensitivityY;
-  // Guard against NaN/Inf landmarks (a malformed detector frame). A
-  // non-finite delta would make the static_cast<int> below undefined
-  // behavior, so drop the frame cleanly and re-baseline next frame.
-  if (!std::isfinite(dx) || !std::isfinite(dy)) {
-    prevPivot_ = p;
-    return;
-  }
-  if (std::fabs(dx) < dz) dx = 0.0f;
-  if (std::fabs(dy) < dz) dy = 0.0f;
-  // Convert normalized motion to pixel motion. virtW/virtH are the
-  // real virtual-desktop dimensions (cached once on OverlayWindow
-  // ::Init), so this works correctly on 4K and multi-monitor
-  // setups — not just the old 1920x1080 assumption.
-  int pixelDx = static_cast<int>(dx * static_cast<float>(virtW));
-  int pixelDy = static_cast<int>(dy * static_cast<float>(virtH));
+  // Webcam frames are mirrored (selfie convention). The MediaPipe
+  // landmark x grows toward the camera's right, but the user perceives
+  // their own hand moving toward their right when the landmark x
+  // shrinks. Flip X so "my hand to my right" → "cursor to the right of
+  // the screen". Y is left untouched because vertical is not mirrored.
+  //
+  // Clamp to [0, 1] first: MediaPipe occasionally reports landmarks
+  // slightly outside [0, 1] due to model padding; without the clamp
+  // the cast to int would jump the cursor off the edge of the screen.
+  const float nx = std::clamp(p.x, 0.0f, 1.0f);
+  const float ny = std::clamp(p.y, 0.0f, 1.0f);
+  // screenX / screenY are absolute desktop pixels (NOT just within
+  // the primary monitor). On a single-monitor rig virtX == virtY ==
+  // 0 so the result is identical to a primary-only coordinate; on
+  // a multi-monitor rig where the primary is the right monitor
+  // (virtX < 0) this lets SetCursorPos reach across to the
+  // secondary monitor.
+  int screenX = virtX + static_cast<int>((1.0f - nx) * static_cast<float>(virtW - 1));
+  int screenY = virtY + static_cast<int>(ny * static_cast<float>(virtH - 1));
+  // Clamp to the virtual desktop rectangle. Negative values come
+  // from a hand held to the camera's edge before the clamp; values
+  // past (virtX + virtW - 1) come from a hand held past the other
+  // edge. Either way, push the cursor onto the desktop.
+  if (screenX < virtX) screenX = virtX;
+  if (screenY < virtY) screenY = virtY;
+  if (screenX > virtX + virtW - 1) screenX = virtX + virtW - 1;
+  if (screenY > virtY + virtH - 1) screenY = virtY + virtH - 1;
 
-  // v0.5: feed the post-deadzone pixel delta into the adaptive
-  // observer so CursorDeadZone() can adapt from the real
-  // stillness noise. We record the *pixel* delta (not normalized)
-  // because that's what the 3-sigma threshold is calibrated in.
-  if (pixelDx != 0 || pixelDy != 0) {
-    GetSignalObserver().RecordCursorMotion(
-        static_cast<double>(pixelDx),
-        static_cast<double>(pixelDy));
-  }
-
-  if (pixelDx != 0 || pixelDy != 0) {
-    VMOSUE_LOG_DEBUG("Cursor delta: ({}, {})", pixelDx, pixelDy);
-    // Task 13: propagate delta via the ActionSet so the consumer thread
-    // can dispatch it to InputInjector. The state machine owns the mutex.
-    actions.cursorDx = pixelDx;
-    actions.cursorDy = pixelDy;
-  }
-  prevPivot_ = p;
+  // Feed the absolute target into the action set. The consumer
+  // (App.cpp's stateMachineLoop) checks cursorX != INT_MIN to decide
+  // whether to call SetCursorPos; we set it unconditionally here so
+  // a frame with a hand present always carries an absolute target.
+  actions.cursorX = screenX;
+  actions.cursorY = screenY;
 }
 
 }  // namespace vmosue

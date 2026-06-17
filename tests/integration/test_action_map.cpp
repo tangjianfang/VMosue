@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <climits>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -162,6 +163,13 @@ static std::vector<HandLandmarks> makeHands(const FrameSpec& s) {
 // Drive frames, return merged ActionSet AND the final state.
 struct RunResult {
   ActionSet   actions{};
+  // First cursorX/Y we observed from the state machine (sentinel until
+  // a hand is detected). Recorded alongside the merged final cursor
+  // target so cursor-motion tests can verify "cursor moved" by
+  // comparing first vs last rather than asserting on the absolute
+  // value (which depends on the test's virtual-desktop size).
+  int firstCursorX = INT_MIN;
+  int firstCursorY = INT_MIN;
   GlobalState finalState = GlobalState::Active;
 };
 
@@ -175,8 +183,16 @@ static RunResult runFrames(GestureStateMachine& sm,
     if (dt <= 0.0) dt = 1.0 / 30.0;
     sm.OnLandmarks(makeHands(f), f.ts_ms, dt);
     auto d = sm.ConsumeActions();
-    rr.actions.cursorDx       += d.cursorDx;
-    rr.actions.cursorDy       += d.cursorDy;
+    // Cursor target is absolute; the latest frame's value wins. We
+    // additionally capture the FIRST observed cursorX/Y so tests can
+    // assert "cursor moved" without depending on the virtual-desktop
+    // size baked into the test build.
+    if (d.cursorX != INT_MIN && rr.firstCursorX == INT_MIN) {
+      rr.firstCursorX = d.cursorX;
+      rr.firstCursorY = d.cursorY;
+    }
+    rr.actions.cursorX        = d.cursorX;
+    rr.actions.cursorY        = d.cursorY;
     rr.actions.wheel          += d.wheel;
     rr.actions.hWheel         += d.hWheel;
     rr.actions.leftClick       = rr.actions.leftClick       || d.leftClick;
@@ -222,11 +238,38 @@ static std::string fixturePath(const char* name) {
 // Assert that NO action field is set EXCEPT those listed in `allow`.
 // `allow` is a space-separated list of tokens; absent tokens mean the
 // field must be zero/false. Keeps anti-cross-talk checks to one line.
-static void expectOnly(const ActionSet& a, const std::string& allow) {
+// `cursorX/Y` use INT_MIN as the "no cursor target this frame"
+// sentinel, so we compare against that instead of 0 — a valid
+// absolute position can legitimately be 0 (hand at top-left of the
+// video frame).
+//
+// NOTE: for absolute cursor mapping, even a stationary hand produces
+// a non-sentinel cursorX every frame (it points at the hand's screen
+// position). What anti-cross-talk wants to assert is "the cursor
+// TARGET DID NOT MOVE" across this fixture, not "cursorX is the
+// sentinel". Pass the first observed cursor position via `first` so
+// we can compare against it.
+static void expectOnly(const ActionSet& a,
+                       const std::string& allow,
+                       int firstCursorX = INT_MIN,
+                       int firstCursorY = INT_MIN) {
   auto has = [&](const char* key) {
     return allow.find(key) != std::string::npos;
   };
-  if (!has("cursor"))    { EXPECT_EQ(a.cursorDx, 0); EXPECT_EQ(a.cursorDy, 0); }
+  if (!has("cursor")) {
+    // Cursor cross-talk check: target must be either "no frame had a
+    // hand" (sentinel) or "the target stayed put" (same as the first
+    // observed position). Anything else means another gesture
+    // accidentally moved the cursor.
+    if (firstCursorX == INT_MIN) {
+      EXPECT_EQ(a.cursorX, INT_MIN);
+      EXPECT_EQ(a.cursorY, INT_MIN);
+    } else {
+      EXPECT_EQ(a.cursorX, firstCursorX)
+          << "cursor must not move during a non-cursor gesture";
+      EXPECT_EQ(a.cursorY, firstCursorY);
+    }
+  }
   if (!has("leftClick")) EXPECT_FALSE(a.leftClick);
   if (!has("double"))    EXPECT_FALSE(a.leftDoubleClick);
   if (!has("leftDown"))  EXPECT_FALSE(a.leftDown);
@@ -255,12 +298,20 @@ TEST_F(ActionMap, CursorMove) {
   cfg.click.holdForDragMs = 100000;  // never let a stray pinch become a drag
   sm.Init(cfg);
   auto r = runFrames(sm, loadFixture(fixturePath("cursor_move.json")));
-  // The camera image is mirrored (selfie convention) so CursorController
-  // negates dx: a hand moving right (+x_base) moves the cursor LEFT
-  // (cursorDx < 0). This is the intended behaviour per the comment in
-  // CursorController.cpp ("Negate dx so cursor follows the hand as the
-  // user sees it").
-  EXPECT_LT(r.actions.cursorDx, 0) << "cursor must move left when hand moves right (mirrored camera)";
+  // Absolute mapping: the camera image is mirrored (selfie
+  // convention), so CursorController flips X: a hand moving right in
+  // the video (x_base increasing) drives the cursor LEFT on screen
+  // (cursorX decreasing). The merged cursorX is the last frame's
+  // absolute target, so we compare it to the first frame's target
+  // rather than asserting on a raw value (which depends on the test
+  // machine's virtual-desktop size).
+  ASSERT_NE(r.actions.cursorX, INT_MIN)
+      << "CursorController should have produced an absolute target";
+  ASSERT_NE(r.firstCursorX, INT_MIN)
+      << "First-frame cursorX must be recorded for the move-direction check";
+  EXPECT_LT(r.actions.cursorX, r.firstCursorX)
+      << "cursor must move left when the hand moves right in the video "
+         "(mirrored camera convention)";
   expectOnly(r.actions, "cursor");
 }
 
@@ -271,7 +322,10 @@ TEST_F(ActionMap, LeftClick) {
   sm.Init(cfg);
   auto r = runFrames(sm, loadFixture(fixturePath("left_click.json")));
   EXPECT_TRUE(r.actions.leftClick);
-  expectOnly(r.actions, "leftClick");
+  // The right hand is stationary in this fixture; cursor target
+  // must equal the first observed position.
+  expectOnly(r.actions, "leftClick",
+             r.firstCursorX, r.firstCursorY);
 }
 
 TEST_F(ActionMap, DoubleClick) {
@@ -282,7 +336,8 @@ TEST_F(ActionMap, DoubleClick) {
   auto r = runFrames(sm, loadFixture(fixturePath("double_click.json")));
   EXPECT_TRUE(r.actions.leftDoubleClick);
   // Allow left-family events; forbid unrelated families.
-  expectOnly(r.actions, "leftClick double leftDown leftUp");
+  expectOnly(r.actions, "leftClick double leftDown leftUp",
+             r.firstCursorX, r.firstCursorY);
 }
 
 TEST_F(ActionMap, LeftDrag) {
@@ -293,9 +348,13 @@ TEST_F(ActionMap, LeftDrag) {
   auto r = runFrames(sm, loadFixture(fixturePath("left_drag.json")));
   EXPECT_TRUE(r.actions.leftDown) << "drag should press LMB";
   EXPECT_TRUE(r.actions.leftUp)   << "drag should release LMB";
-  // Same mirrored-camera convention as CursorMove: hand moves right (+x),
-  // cursor moves left (cursorDx < 0).
-  EXPECT_LT(r.actions.cursorDx, 0) << "drag should move the cursor (mirrored)";
+  // Same mirrored-camera convention as CursorMove: the dragged hand
+  // walks right in the video (x_base 0.50 -> 0.60), so the cursor
+  // target walks left on screen.
+  EXPECT_NE(r.actions.cursorX, INT_MIN)
+      << "drag should produce an absolute cursor target";
+  EXPECT_LT(r.actions.cursorX, r.firstCursorX)
+      << "drag should move the cursor (mirrored)";
   expectOnly(r.actions, "leftDown leftUp cursor");
 }
 
@@ -306,7 +365,10 @@ TEST_F(ActionMap, MiddleClick) {
   sm.Init(cfg);
   auto r = runFrames(sm, loadFixture(fixturePath("middle_click.json")));
   EXPECT_TRUE(r.actions.middleClick);
-  expectOnly(r.actions, "middle");
+  // Stationary right hand; cursor target must equal the first
+  // observed position.
+  expectOnly(r.actions, "middle",
+             r.firstCursorX, r.firstCursorY);
 }
 
 TEST_F(ActionMap, RightClick) {
@@ -316,7 +378,10 @@ TEST_F(ActionMap, RightClick) {
   sm.Init(cfg);
   auto r = runFrames(sm, loadFixture(fixturePath("right_click.json")));
   EXPECT_TRUE(r.actions.rightClick);
-  expectOnly(r.actions, "right");
+  // Stationary right hand; cursor target must equal the first
+  // observed position.
+  expectOnly(r.actions, "right",
+             r.firstCursorX, r.firstCursorY);
 }
 
 TEST_F(ActionMap, ScrollVertical) {

@@ -68,7 +68,10 @@ Missing keys default to "feature off". Per-test `GestureStateMachine::Config`
 overrides pin any timing the fixture depends on so tests are deterministic
 regardless of adaptive warm-up order.
 
-**Mirrored-camera convention:** `CursorController` negates the x delta so the
-cursor follows the user's perceived hand direction (selfie-mirror). A fixture
-with increasing `x_base` (hand moves right) produces `cursorDx < 0` (cursor
-moves left on screen). Tests assert the sign accordingly.
+**Mirrored-camera convention:** `CursorController` flips X so the cursor
+follows the user's perceived hand direction (selfie-mirror). A fixture
+with increasing `x_base` (hand moves right in the video) drives the
+absolute cursor target LEFT on screen — the merged `cursorX` decreases
+from frame to frame. Tests compare the first and last observed
+`cursorX` to verify the direction without depending on the test
+machine's virtual-desktop size.

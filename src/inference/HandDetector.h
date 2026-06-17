@@ -38,11 +38,13 @@ class HandDetector {
     // Score floor for phantom-hand rejection. The MediaPipe model
     // returns up to num_hands detections per frame; when only one
     // real hand is visible the second slot is often filled with a
-    // low-confidence phantom (~0.5-0.65). Raising this to 0.6 keeps
-    // genuine detections and rejects the phantom at the source. Also
+    // low-confidence phantom (~0.4-0.55). The C++ side applies its
+    // own adaptive score-gap filter (AdaptiveController::MinHandScore,
+    // hard floor 0.3) so we can afford a lower source-side floor and
+    // keep more borderline-real hands in the candidate set. Also
     // forwarded to MediaPipe's `min_hand_detection_confidence` and
     // `min_hand_presence_confidence` via the Python server.
-    float minHandConfidence = 0.6f;
+    float minHandConfidence = 0.4f;
     bool useGpu = true;
     // Task 33: target resolution of the frame the detector will see.
     // The App downsamples the camera frame to these dimensions

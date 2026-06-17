@@ -195,6 +195,17 @@ class App {
   // "hand re-appearing at a different location" doesn't pollute
   // the deltas with a huge first-frame jump.
   std::optional<HandLandmarks> prevRightHand_;
+
+  // v0.5: wall-clock timestamp of the previous inference tick,
+  // used to compute the actual elapsed dt for the OneEuro
+  // smoother. The IPC round-trip is non-deterministic (20-80ms
+  // in practice), so using a constant `1/inferenceFps` over-
+  // or under-shoots the smoother's derivative estimate and
+  // causes cursor jitter under variable cadence. Stored as a
+  // steady_clock time_point; initialized at construction so the
+  // first frame's dt is measured from "now", not from epoch 0.
+  std::chrono::steady_clock::time_point last_smooth_ts_{
+      std::chrono::steady_clock::now()};
 };
 
 }  // namespace vmosue

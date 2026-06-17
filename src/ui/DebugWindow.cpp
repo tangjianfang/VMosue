@@ -401,12 +401,29 @@ void DebugWindow::render() {
               previewX, previewY,
               previewX + static_cast<float>(kPreviewW),
               previewY + static_cast<float>(kPreviewH));
+          // Selfie-mirror the preview bitmap so what the user sees
+          // matches the OS cursor and the skeleton overlay. The
+          // webcam delivers the unmirrored raw frame; both the
+          // CursorController and OverlayGeometry::LandmarkToScreen
+          // flip X with `(1 - nx) * (W - 1)`. Without this D2D
+          // transform the user would see their hand on one side of
+          // the preview while the OS cursor goes the other way.
+          // We scale around the horizontal center of the dest
+          // rectangle so the image stays inside the preview box.
+          const float cx = (dest.left + dest.right) * 0.5f;
+          const float cy = (dest.top + dest.bottom) * 0.5f;
+          renderTarget_->SetTransform(
+              D2D1::Matrix3x2F::Scale(-1.0f, 1.0f,
+                                      D2D1::Point2F(cx, cy)));
           renderTarget_->DrawBitmap(
               bmp, dest, 1.0f,
               D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
               D2D1::RectF(0, 0,
                           static_cast<float>(snap.frame.width),
                           static_cast<float>(snap.frame.height)));
+          // Reset the transform so subsequent draws (overlays, text,
+          // skeletons) are not mirrored by accident.
+          renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
           bmp->Release();
           drew = true;
         }
@@ -466,16 +483,23 @@ void DebugWindow::render() {
 
   // ---- Landmark overlay (drawn on top of the preview) ----
   // For each hand, draw 21 small filled circles at the normalized
-  // (x, y) positions, mapped to the 400x300 preview area. We don't
-  // have a D2D DrawFilledEllipse in the stub, so we draw the
-  // outline only (DrawEllipse) — the user can still see the dots.
+  // (x, y) positions, mapped to the preview area. The preview
+  // bitmap below is drawn with a selfie-mirror transform, so the
+  // landmark dots must use the same mirror formula to land ON TOP
+  // of the hand in the visible preview. Without this mirror, a
+  // hand at camera-left (small nx) would show on the right of the
+  // mirrored preview but its dots would still be drawn at preview-
+  // left — the visual would look "torn". This is the same
+  // (1 - nx) * (W - 1) form used by CursorController and
+  // OverlayGeometry, just with the preview rect's width/height
+  // instead of the virtual desktop.
   if (brushGreen_) {
     for (const auto& h : snap.landmarks) {
       for (int i = 0; i < HandLandmarks::kNumPoints; ++i) {
         float nx = std::clamp(h.points[i].x, 0.0f, 1.0f);
         float ny = std::clamp(h.points[i].y, 0.0f, 1.0f);
-        float px = previewX + nx * static_cast<float>(kPreviewW);
-        float py = previewY + ny * static_cast<float>(kPreviewH);
+        float px = previewX + (1.0f - nx) * static_cast<float>(kPreviewW - 1);
+        float py = previewY + ny * static_cast<float>(kPreviewH - 1);
         // Right hand = green, left hand = yellow (color by handedness).
         ID2D1SolidColorBrush* b = (h.handedness == 1)
                                        ? brushGreen_

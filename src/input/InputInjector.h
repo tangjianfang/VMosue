@@ -33,6 +33,15 @@ class InputInjector {
   // are zero so we don't issue spurious SendInput calls.
   void MoveCursor(int dx, int dy);
 
+  // Place the system cursor at absolute virtual-screen pixel (x, y).
+  // Preferred path for the gesture pipeline now that CursorController
+  // produces absolute targets: SetCursorPos is a single kernel call,
+  // whereas SendInput(MOVE) goes through the input stack and incurs
+  // noticeably more overhead per call at 30+ Hz. No-op when x or y
+  // is negative (the caller is expected to have already clamped to
+  // the virtual desktop rect).
+  void SetCursorPos(int x, int y);
+
   // Maximum per-call pixel delta applied by MoveCursor. Exposed as a
   // constant so tests can assert the bound without re-deriving it.
   // Defense-in-depth: a noisy first frame or a future bug in the

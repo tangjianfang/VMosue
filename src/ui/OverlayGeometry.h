@@ -19,16 +19,26 @@ struct ScreenPoint {
 //   virtW = SM_CXVIRTUALSCREEN
 //   virtH = SM_CYVIRTUALSCREEN
 //
-// The mapping is the obvious 1:1 affine: a landmark at (0, 0) in
-// camera coords lands at (virtX, virtY); (1, 1) at (virtX+virtW,
-// virtY+virtH). Aspect ratio is NOT preserved here; the spec says
-// landmarks map 1:1 to pixels.
+// The X axis is flipped for the selfie-mirror convention: a
+// landmark at the camera's left (small lm.x) maps to the screen's
+// right. The Y axis is unmirrored (vertical is not affected by the
+// selfie convention). The (W - 1) / (H - 1) form is intentional —
+// it matches CursorController's absolute 1:1 mapping so the
+// skeleton overlay drawn by this helper and the OS cursor moved by
+// CursorController agree on the hand's screen position. (An earlier
+// version used `lm.x * virtW` and diverged from CursorController;
+// the user saw the skeleton on one side of the screen and the
+// cursor on the other.)
 inline ScreenPoint LandmarkToScreen(const Point2F& lm,
                                     int virtX, int virtY,
                                     int virtW, int virtH) {
+  // Defensive clamps: the W-1 / H-1 form means a single bad landmark
+  // could otherwise send the overlay outside the desktop bounds.
+  const int w = (virtW > 0) ? virtW : 1;
+  const int h = (virtH > 0) ? virtH : 1;
   return ScreenPoint{
-      static_cast<float>(virtX) + lm.x * static_cast<float>(virtW),
-      static_cast<float>(virtY) + lm.y * static_cast<float>(virtH),
+      static_cast<float>(virtX) + (1.0f - lm.x) * static_cast<float>(w - 1),
+      static_cast<float>(virtY) + lm.y * static_cast<float>(h - 1),
   };
 }
 

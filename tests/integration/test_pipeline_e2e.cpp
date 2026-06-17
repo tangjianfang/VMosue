@@ -22,6 +22,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <climits>
 #include <cstdint>
 #include <fstream>
 #include <string>
@@ -249,29 +250,47 @@ static std::vector<HandLandmarks> makeHands(const FrameSpec& s) {
 // Drive the state machine with the supplied frames and return the
 // merged ActionSet accumulated across the whole run. Frames are
 // spaced at the fixture's nominal dt (~50ms).
-static vmosue::ActionSet runFrames(GestureStateMachine& sm,
-                                   const std::vector<FrameSpec>& frames) {
+//
+// Cursor target is now an absolute screen position (INT_MIN sentinel
+// when no hand was visible, OR after emergency-stop cleared the
+// pending action set) rather than a relative delta. The latest
+// frame always wins, so we replace (not add) on each drain — but
+// we also keep `lastNonSentinelCursorX/Y` so tests can verify that
+// the cursor phase DID produce a real target even if emergency stop
+// later wiped pending_ back to the sentinel.
+struct RunOutput {
   vmosue::ActionSet merged{};
+  int lastNonSentinelCursorX = INT_MIN;
+  int lastNonSentinelCursorY = INT_MIN;
+};
+
+static RunOutput runFrames(GestureStateMachine& sm,
+                           const std::vector<FrameSpec>& frames) {
+  RunOutput out;
   int64_t prevTs = -1;
   for (const auto& f : frames) {
     double dt = (prevTs < 0) ? (1.0 / 30.0) : double(f.ts_ms - prevTs) / 1000.0;
     if (dt <= 0.0) dt = 1.0 / 30.0;
     sm.OnLandmarks(makeHands(f), f.ts_ms, dt);
     auto drained = sm.ConsumeActions();
-    merged.cursorDx        += drained.cursorDx;
-    merged.cursorDy        += drained.cursorDy;
-    merged.wheel           += drained.wheel;
-    merged.hWheel          += drained.hWheel;
-    merged.leftClick        = merged.leftClick        || drained.leftClick;
-    merged.leftDoubleClick  = merged.leftDoubleClick  || drained.leftDoubleClick;
-    merged.leftDown         = merged.leftDown         || drained.leftDown;
-    merged.leftUp           = merged.leftUp           || drained.leftUp;
-    merged.rightClick       = merged.rightClick       || drained.rightClick;
-    merged.middleClick      = merged.middleClick      || drained.middleClick;
-    merged.safeRelease      = merged.safeRelease      || drained.safeRelease;
+    out.merged.cursorX       = drained.cursorX;
+    out.merged.cursorY       = drained.cursorY;
+    out.merged.wheel           += drained.wheel;
+    out.merged.hWheel          += drained.hWheel;
+    out.merged.leftClick        = out.merged.leftClick        || drained.leftClick;
+    out.merged.leftDoubleClick  = out.merged.leftDoubleClick  || drained.leftDoubleClick;
+    out.merged.leftDown         = out.merged.leftDown         || drained.leftDown;
+    out.merged.leftUp           = out.merged.leftUp           || drained.leftUp;
+    out.merged.rightClick       = out.merged.rightClick       || drained.rightClick;
+    out.merged.middleClick      = out.merged.middleClick      || drained.middleClick;
+    out.merged.safeRelease      = out.merged.safeRelease      || drained.safeRelease;
+    if (drained.cursorX != INT_MIN) {
+      out.lastNonSentinelCursorX = drained.cursorX;
+      out.lastNonSentinelCursorY = drained.cursorY;
+    }
     prevTs = f.ts_ms;
   }
-  return merged;
+  return out;
 }
 
 // Locate the fixtures directory relative to the test working dir.
@@ -327,11 +346,11 @@ TEST_F(PipelineE2E, CursorMovesDuringFrames0Through4) {
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{5});
   std::vector<FrameSpec> phase(frames.begin(), frames.begin() + 5);
-  auto actions = runFrames(sm, phase);
-  EXPECT_NE(actions.cursorDx, 0)
-      << "CursorController should have produced non-zero dx while the "
-         "right-hand MCP walked rightward.";
-  EXPECT_FALSE(actions.leftClick)
+  auto out = runFrames(sm, phase);
+  EXPECT_NE(out.merged.cursorX, INT_MIN)
+      << "CursorController should have produced an absolute target while "
+         "the right-hand MCP was visible.";
+  EXPECT_FALSE(out.merged.leftClick)
       << "Cursor phase must not emit any clicks.";
 }
 
@@ -341,12 +360,12 @@ TEST_F(PipelineE2E, ClickFiresDuringFrames5Through8) {
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{9});
   std::vector<FrameSpec> phase(frames.begin() + 5, frames.begin() + 9);
-  auto actions = runFrames(sm, phase);
-  EXPECT_TRUE(actions.leftClick)
+  auto out = runFrames(sm, phase);
+  EXPECT_TRUE(out.merged.leftClick)
       << "Frames 5-8 contain a quick pinch and release; the click "
          "detector must emit LeftClick.";
   // No drag start should appear in this short pinch window.
-  EXPECT_FALSE(actions.leftDown);
+  EXPECT_FALSE(out.merged.leftDown);
 }
 
 TEST_F(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
@@ -355,19 +374,19 @@ TEST_F(PipelineE2E, DragStartAndEndDuringFrames9Through15) {
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{16});
   std::vector<FrameSpec> phase(frames.begin() + 9, frames.begin() + 16);
-  auto actions = runFrames(sm, phase);
+  auto out = runFrames(sm, phase);
   // The state machine maps LeftDragStart -> leftDown and
   // LeftDragEnd -> leftUp. A held pinch over the drag threshold
   // (200ms by default) must yield both edges within this 7-frame
   // window.
-  EXPECT_TRUE(actions.leftDown)
+  EXPECT_TRUE(out.merged.leftDown)
       << "Frames 9-15 hold the pinch past holdForDragMs; expected a "
          "LeftDragStart (leftDown) edge.";
-  EXPECT_TRUE(actions.leftUp)
+  EXPECT_TRUE(out.merged.leftUp)
       << "Frames 9-15 end with a release; expected a LeftDragEnd "
          "(leftUp) edge.";
   // Drag should not double as a click.
-  EXPECT_FALSE(actions.leftClick);
+  EXPECT_FALSE(out.merged.leftClick);
 }
 
 TEST_F(PipelineE2E, ScrollFiresDuringFrames16Through20) {
@@ -380,8 +399,8 @@ TEST_F(PipelineE2E, ScrollFiresDuringFrames16Through20) {
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{21});
   std::vector<FrameSpec> phase(frames.begin() + 16, frames.begin() + 21);
-  auto actions = runFrames(sm, phase);
-  EXPECT_NE(actions.wheel, 0)
+  auto out = runFrames(sm, phase);
+  EXPECT_NE(out.merged.wheel, 0)
       << "ScrollDetector should have observed left-hand index-tip "
          "motion while index+middle tips were pinched together.";
 }
@@ -412,11 +431,11 @@ TEST_F(PipelineE2E, EmergencyStopDuringFrames26Through29) {
   auto frames = loadFixture(locateFixture());
   ASSERT_GE(frames.size(), size_t{30});
   std::vector<FrameSpec> phase(frames.begin() + 26, frames.begin() + 30);
-  auto actions = runFrames(sm, phase);
+  auto out = runFrames(sm, phase);
   EXPECT_EQ(sm.State(), GlobalState::EmergencyStopped)
       << "Both hands visibly open past twoHandOpenHoldMs should trip "
          "the emergency-stop path.";
-  EXPECT_TRUE(actions.safeRelease)
+  EXPECT_TRUE(out.merged.safeRelease)
       << "EmergencyStop() must surface a safeRelease hint to any "
          "downstream consumer (overlay, input layer).";
 }
@@ -432,15 +451,18 @@ TEST_F(PipelineE2E, FullSequenceProducesAllExpectedEvents) {
   sm.Init(cfg);
   auto frames = loadFixture(locateFixture());
   ASSERT_EQ(frames.size(), 30u);
-  auto actions = runFrames(sm, frames);
+  auto out = runFrames(sm, frames);
   // Sanity-check the merged ActionSet across the full sequence.
-  EXPECT_NE(actions.cursorDx, 0)
-      << "Cursor phase should have produced non-zero dx.";
-  EXPECT_TRUE(actions.leftClick)   << "Click phase must emit LeftClick.";
-  EXPECT_TRUE(actions.leftDown)    << "Drag phase must emit LeftDown.";
-  EXPECT_TRUE(actions.leftUp)      << "Drag phase must emit LeftUp.";
-  EXPECT_NE(actions.wheel, 0)      << "Scroll phase must emit wheel deltas.";
-  EXPECT_TRUE(actions.safeRelease)
+  // EmergencyStop wipes pending_ back to its default; the cursor
+  // target from the cursor phase (frames 0-4) is preserved only in
+  // out.lastNonSentinelCursorX, which is what we assert against.
+  EXPECT_NE(out.lastNonSentinelCursorX, INT_MIN)
+      << "Cursor phase should have produced an absolute target.";
+  EXPECT_TRUE(out.merged.leftClick)   << "Click phase must emit LeftClick.";
+  EXPECT_TRUE(out.merged.leftDown)    << "Drag phase must emit LeftDown.";
+  EXPECT_TRUE(out.merged.leftUp)      << "Drag phase must emit LeftUp.";
+  EXPECT_NE(out.merged.wheel, 0)      << "Scroll phase must emit wheel deltas.";
+  EXPECT_TRUE(out.merged.safeRelease)
       << "Emergency-stop phase must surface a safeRelease hint.";
   EXPECT_EQ(sm.State(), GlobalState::EmergencyStopped)
       << "Final state must be EmergencyStopped after the two-hand-open "

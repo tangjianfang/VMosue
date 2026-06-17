@@ -110,10 +110,22 @@ class SignalObserver {
   // Cache the virtual-desktop dimensions. Called once on
   // OverlayWindow::Init; consumed by CursorController for pixel
   // conversion (replacing the v0.4 hard-coded 1920x1080).
-  void RecordVirtualDesktop(int w, int h) {
+  // (x, y) is the virtual-desktop origin in pixels (negative on
+  // multi-monitor rigs where the primary is not at (0, 0)). The
+  // default (0, 0, 1920, 1080) matches the documented cold-start
+  // fallback and is what every test sees unless Init ran on a real
+  // multi-monitor host.
+  void RecordVirtualDesktop(int x, int y, int w, int h) {
     std::lock_guard<std::mutex> lk(mu_);
+    virtX_ = x;
+    virtY_ = y;
     virtW_ = w;
     virtH_ = h;
+  }
+  // Backwards-compatible overload for callers that don't track
+  // the origin (the existing tests). Records (0, 0) as the origin.
+  void RecordVirtualDesktop(int w, int h) {
+    RecordVirtualDesktop(0, 0, w, h);
   }
 
   // Record the per-frame z (depth) delta. World-space z is in
@@ -281,6 +293,15 @@ class SignalObserver {
     return {virtW_, virtH_};
   }
 
+  // Virtual desktop origin in pixels (top-left of the spanning
+  // rectangle, may be negative on multi-monitor rigs). Used by
+  // CursorController to translate the normalized landmark + selfie
+  // flip into an absolute SetCursorPos target.
+  std::pair<int, int> VirtualDesktopOrigin() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return {virtX_, virtY_};
+  }
+
   struct ZMotionStats {
     bool hasData;
     double stdDz;  // stddev of per-frame depth deltas (meters)
@@ -405,6 +426,8 @@ class SignalObserver {
 
   int virtW_ = 1920;
   int virtH_ = 1080;
+  int virtX_ = 0;
+  int virtY_ = 0;
 };
 
 // Global instance; consumers read directly. Singleton is OK here
@@ -517,10 +540,13 @@ class AdaptiveController {
   //     smooth (high beta); the faster the motion, the less
   //     smoothing (low beta) to keep cursor responsive.
   //
-  // Cold-start: (1.0, 0.005) — v0.4 defaults.
+  // Cold-start: (2.5, 0.02) — less aggressive than the v0.4
+  // (1.0, 0.005) defaults so the very first second after startup
+  // feels responsive rather than rubbery. The adaptive controller
+  // overrides these from observation within ~1 s of warm-up.
   std::pair<double, double> LandmarkFilterParams() const {
     auto s = GetSignalObserver().GetLandmarkMotion();
-    if (!s.hasData) return {1.0, 0.005};
+    if (!s.hasData) return {2.5, 0.02};
     double sigma = std::max(s.stdDx, s.stdDy);
     double meanMotion = std::max(s.meanAbsDx, s.meanAbsDy);
     constexpr double kNf = 50.0;       // mincutoff = 50 * sigma
@@ -530,8 +556,8 @@ class AdaptiveController {
     double beta = std::clamp(kBeta / (meanMotion + epsilon),
                               0.001, 0.05);
     return {
-      BlendWithFallback(static_cast<float>(mincutoff), 1.0f),
-      BlendWithFallback(static_cast<float>(beta), 0.005f),
+      BlendWithFallback(static_cast<float>(mincutoff), 2.5f),
+      BlendWithFallback(static_cast<float>(beta), 0.02f),
     };
   }
 

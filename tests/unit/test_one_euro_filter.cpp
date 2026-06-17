@@ -55,3 +55,74 @@ TEST(OneEuroFilter, AdaptParamsDoesNotSnap) {
   EXPECT_LT(v, 7.0);
   EXPECT_GT(v, 3.0);
 }
+
+// v0.5: the smoother in App::inferenceLoop is now driven by actual
+// wall-clock dt (the real elapsed time between frames, which varies
+// 20-80ms under Python IPC) instead of a constant `1/inferenceFps`.
+// This test pins the contract that the dt parameter is HONORED: the
+// same input trajectory, filtered at two different dts, must produce
+// different outputs. Concretely, a longer dt (slower frame rate)
+// gives a lower alpha in the low-pass, so the filter tracks a step
+// input more slowly. If OneEuroFilter ever stops reading dt (e.g. a
+// future refactor hardcodes the cadence), this test breaks.
+TEST(OneEuroFilter, DtParameterChangesTracking) {
+  // Step from 0 -> 100 at one frame, then stay at 100 for 30 more
+  // frames. With dt=0.033 (30 Hz nominal) the filter should reach
+  // ~90% of the way in those 30 frames; with dt=0.100 (10 Hz idle
+  // downshift) the same 30 frames are stretched to wall-clock 3
+  // seconds of filter time, and the filter should track the step
+  // essentially perfectly by then.
+  const double kStep = 100.0;
+  const int    kSteps = 30;
+
+  OneEuroFilter fast(30.0, 1.0, 0.0, 1.0);
+  // First call: seed
+  fast.Filter(0.0, 1.0 / 30.0);
+  fast.Filter(kStep, 1.0 / 30.0);
+  for (int i = 0; i < kSteps; ++i) {
+    fast.Filter(kStep, 1.0 / 30.0);
+  }
+  const double fastFinal = fast.Filter(kStep, 1.0 / 30.0);
+
+  OneEuroFilter slow(30.0, 1.0, 0.0, 1.0);
+  slow.Filter(0.0, 1.0 / 30.0);  // same seed dt for fairness
+  slow.Filter(kStep, 1.0 / 30.0);
+  // Same 30 updates but each one spans 100ms of wall time instead
+  // of 33ms — so the filter has had ~3s of effective time to settle,
+  // which is much more than the 1s of the fast path. The slow path
+  // output should be closer to kStep than the fast path output.
+  for (int i = 0; i < kSteps; ++i) {
+    slow.Filter(kStep, 1.0 / 10.0);
+  }
+  const double slowFinal = slow.Filter(kStep, 1.0 / 10.0);
+
+  // Sanity: both filters actually track the step (no NaN, no snap
+  // to zero).
+  EXPECT_GT(fastFinal, kStep * 0.5);
+  EXPECT_GT(slowFinal, kStep * 0.5);
+  // The core regression: slowFinal is strictly closer to kStep
+  // than fastFinal. This is the contract the wall-clock dt fix
+  // relies on — if dt is ignored, both would converge to the same
+  // value within numerical noise.
+  EXPECT_LT(kStep - slowFinal, kStep - fastFinal)
+      << "dt parameter is not honored: "
+      << "fastFinal=" << fastFinal << " slowFinal=" << slowFinal;
+}
+
+// Companion test: dt <= 0 (including the dt=0 default) must fall
+// back to the constructor's freq_ (preserving the original Filter
+// signature's behavior for callers that don't pass an explicit dt).
+TEST(OneEuroFilter, ZeroDtFallsBackToFreq) {
+  OneEuroFilter explicit_(30.0, 1.0, 0.0, 1.0);
+  explicit_.Filter(0.0, 1.0 / 30.0);
+  explicit_.Filter(10.0, 1.0 / 30.0);
+  const double a = explicit_.Filter(10.0, 1.0 / 30.0);
+
+  OneEuroFilter defaulted(30.0, 1.0, 0.0, 1.0);
+  defaulted.Filter(0.0, 1.0 / 30.0);
+  defaulted.Filter(10.0, 1.0 / 30.0);
+  // dt=0 -> falls back to 1/freq_ = 1/30, same as explicit case.
+  const double b = defaulted.Filter(10.0, 0.0);
+
+  EXPECT_DOUBLE_EQ(a, b);
+}

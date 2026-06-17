@@ -118,6 +118,20 @@ void InputInjector::MoveCursor(int dx, int dy) {
   }
 }
 
+void InputInjector::SetCursorPos(int x, int y) {
+  if (x < 0 || y < 0) return;  // virtual-desktop coord out of range
+  // SetCursorPos is a single User32 call — measurably cheaper than
+  // SendInput(MOVE) at 30+ Hz because it bypasses the input stack.
+  // We use it now that CursorController emits absolute targets.
+  // Errors here are rare (mostly means we lost a monitor mid-frame);
+  // log and swallow so a single failure doesn't take the consumer
+  // thread down.
+  if (!::SetCursorPos(x, y)) {
+    VMOSUE_LOG_WARN("SetCursorPos({}, {}) failed: gle={}", x, y,
+                    ::GetLastError());
+  }
+}
+
 void InputInjector::LeftDown() {
   // exchange() returns the previous value; if it was already true we
   // are already logically down, so don't emit a duplicate DOWN event.

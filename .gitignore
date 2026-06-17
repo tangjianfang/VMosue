@@ -47,6 +47,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Claude Code local session state (harness lock files, scratch).
+# Project-level .claude/ skills / hooks / settings are still tracked
+# via `git add -f .claude/<file>` on a case-by-case basis.
+.claude/scheduled_tasks.lock
+
+
 # ML model files — downloaded by the build environment, not
 # tracked in git. The official MediaPipe hand_landmarker.task
 # is fetched from storage.googleapis.com (see

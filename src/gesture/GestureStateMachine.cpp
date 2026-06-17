@@ -4,6 +4,7 @@
 #include "util/Logger.h"
 
 #include <cassert>
+#include <climits>
 
 namespace vmosue {
 
@@ -53,6 +54,9 @@ void GestureStateMachine::Reset() {
   twoHandOpenStartMs_ = 0;
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
+  // Default-init leaves cursorX at INT_MIN (sentinel = "no target"),
+  // which is the correct post-reset state — the consumer must not
+  // touch the OS cursor until a real target arrives.
 }
 
 void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, int64_t ts, double dt) {
@@ -243,19 +247,25 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   if (local.leftClick || local.leftDown || local.leftUp ||
       local.leftDoubleClick || local.rightClick || local.middleClick ||
       local.safeRelease ||
-      local.cursorDx != 0 || local.cursorDy != 0) {
-    VMOSUE_LOG_DEBUG("Actions: dx={} dy={} click={} dbl={} down={} up={} "
+      local.cursorX != INT_MIN) {
+    VMOSUE_LOG_DEBUG("Actions: cx={} cy={} click={} dbl={} down={} up={} "
                      "right={} middle={}",
-        local.cursorDx, local.cursorDy,
+        local.cursorX, local.cursorY,
         local.leftClick, local.leftDoubleClick, local.leftDown, local.leftUp,
         local.rightClick, local.middleClick);
   }
   std::lock_guard<std::mutex> lk(actionsMu_);
-  // Cursor deltas are merged additively across frames; the consumer drains
-  // them via ConsumeActions. This avoids losing intermediate motion when
-  // the consumer polls slower than the camera frame rate.
-  pending_.cursorDx += local.cursorDx;
-  pending_.cursorDy += local.cursorDy;
+  // Cursor target is an absolute screen position, not a delta. The
+  // latest frame always wins: a slow consumer polling N frames of
+  // pending cursorX should jump to the freshest target rather than
+  // accumulate a meaningless sum. Skipping the assignment on frames
+  // without a hand (cursorX == INT_MIN sentinel) keeps the previous
+  // target visible until a new one arrives, so the OS cursor doesn't
+  // visibly freeze between detections.
+  if (local.cursorX != INT_MIN) {
+    pending_.cursorX = local.cursorX;
+    pending_.cursorY = local.cursorY;
+  }
   pending_.wheel  += scrollDelta.dy;
   pending_.hWheel += scrollDelta.dx;
   if (local.leftClick)       pending_.leftClick = true;

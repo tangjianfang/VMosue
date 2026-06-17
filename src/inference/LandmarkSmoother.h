@@ -16,8 +16,8 @@ namespace vmosue {
 // construct them on the first call to Smooth().
 class LandmarkSmoother {
  public:
-  LandmarkSmoother(double freq = 30.0, double mincutoff = 1.0,
-                   double beta = 0.005)
+  LandmarkSmoother(double freq = 30.0, double mincutoff = 2.5,
+                   double beta = 0.02)
       : freq_(freq), mincutoff_(mincutoff), beta_(beta), initialized_(false) {
     for (auto& f : xFilters_) f.emplace(freq, mincutoff, beta);
     for (auto& f : yFilters_) f.emplace(freq, mincutoff, beta);
