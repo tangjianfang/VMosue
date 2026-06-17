@@ -139,8 +139,15 @@ int App::Run() {
   // load, move it to startupT_ alongside cam_.Init().
   HandDetector::Config hcfg;
   hcfg.useGpu = initialPerf.useGpu;
-  hcfg.inferenceWidth = 640;
-  hcfg.inferenceHeight = 480;
+  // 320x240 instead of 640x480: mediapipe on CPU takes ~70-88ms at
+  // 640x480 (observed via ProfileGuard[inference] warn log), which
+  // exceeds the 33ms frame budget for 30fps. Pixel count scales as
+  // O(W*H), so 320x240 (1/4 the pixels) targets ~18-25ms — within
+  // budget. Landmark accuracy is sufficient for hand-gesture detection
+  // at arm's length; the landmarks are normalized [0,1] so downstream
+  // gesture math is resolution-independent.
+  hcfg.inferenceWidth = 320;
+  hcfg.inferenceHeight = 240;
   if (!detector_.Init(hcfg).isOk()) {
     VMOSUE_LOG_ERROR("HandDetector init failed");
     return 1;
