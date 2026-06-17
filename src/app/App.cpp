@@ -533,7 +533,7 @@ void App::captureLoop() {
       // PROFILE_GUARD_DISABLED records samples without emitting warn
       // spam; the P50/P95 are read by inferenceLoop's 1Hz log line.
       bool gotFrame;
-      { PROFILE_GUARD_DISABLED("lat_capture"); gotFrame = cam_.TryGetLatestFrame(f); }
+      { ::vmosue::ProfileGuard _pg_cap("lat_capture",true,1e9); gotFrame = cam_.TryGetLatestFrame(f); }
       if (gotFrame) {
         // SPSC: push() only fails if the queue is full, in which case
         // we drop the new frame. The capture thread runs at the
@@ -643,7 +643,7 @@ void App::inferenceLoop() {
           // This is the suspected dominant latency source; comparing its
           // P95 vs the full "inference" P95 isolates how much smoothing
           // contributes on top of the raw network hop.
-          { PROFILE_GUARD_DISABLED("lat_ipc_rtt"); hands = detector_.Detect(inferenceFrame); }
+          { ::vmosue::ProfileGuard _pg_ipc("lat_ipc_rtt",true,1e9); hands = detector_.Detect(inferenceFrame); }
           // Use the perf-mode inference rate for the smoother's
           // time step (dt = 1/fps). This keeps the One-Euro
           // filter tuned to the actual cadence of incoming
@@ -805,7 +805,7 @@ void App::stateMachineLoop() {
         last = now;
 
         // Instrument gesture-pipeline cost (state machine + injection).
-        { PROFILE_GUARD_DISABLED("lat_gesture"); sm_.OnLandmarks(hands, NowMicros() / 1000, dt); }
+        { ::vmosue::ProfileGuard _pg_ges("lat_gesture",true,1e9); sm_.OnLandmarks(hands, NowMicros() / 1000, dt); }
         auto acts = sm_.ConsumeActions();
         auto& inj = InputInjector::Get();
 
