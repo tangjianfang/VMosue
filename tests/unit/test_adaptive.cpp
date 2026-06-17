@@ -10,12 +10,13 @@ using vmosue::GetSignalObserver;
 using vmosue::kColdStartFrames;
 using vmosue::SignalObserver;
 
-// Reset global state between tests so they don't bleed into each
-// other. The observer is a process-singleton; we don't have a Reset()
-// method, so each TEST should drive its own observations and assert
-// against the resulting adaptive value (not against an absolute).
-// The AdaptiveObserverTest fixture below is unused but kept as a
-// placeholder if a future test needs per-test setup.
+// The observer is a process-singleton, so observations bleed across
+// TESTs. Where a test needs a known starting point it calls
+// GetSignalObserver().Reset() and then drives its own observations
+// (and warms past the cold-start + blend window) so the assertion is
+// deterministic regardless of test order. The AdaptiveObserverTest
+// fixture below is unused but kept as a placeholder if a future test
+// needs per-test setup.
 class AdaptiveObserverTest : public ::testing::Test {
  protected:
   void SetUp() override {}
@@ -263,11 +264,20 @@ TEST(Adaptive, PinchAndReleaseFromObservedRange) {
 }
 
 TEST(Adaptive, PinchThresholdSaneAfterWarming) {
-  // By the time this test runs, prior tests have populated the
-  // click-distance rolling window. We just check the value is
-  // within the [min, max] range of the observed distances
-  // (which is the geometric property the adaptive formula
-  // guarantees).
+  // Drive our own observations instead of relying on prior tests
+  // having populated the click-distance window — that cross-test
+  // dependency made this fail whenever the test ran in isolation or
+  // before the tests that recorded distances (the window was empty,
+  // so s.min == s.max == 0 while the cold-start threshold was 0.04).
+  // Reset, warm fully past the blend window, and feed a known
+  // open/closed distance range; the adaptive threshold must then land
+  // inside [min, max] (the geometric property the formula guarantees).
+  GetSignalObserver().Reset();
+  for (int i = 0;
+       i < vmosue::kColdStartFrames + vmosue::kBlendFrames + 5; ++i) {
+    GetSignalObserver().RecordClickDistance(0.10);  // "open"
+    GetSignalObserver().RecordClickDistance(0.02);  // "closed"
+  }
   float p = GetAdaptive().PinchThreshold();
   auto s = GetSignalObserver().GetClickDistance();
   EXPECT_GE(p, static_cast<float>(s.min));
@@ -293,6 +303,20 @@ TEST(Adaptive, ScrollEnterAndExitFromObservedRange) {
 }
 
 TEST(Adaptive, ScrollScaleFactorScalesWithHeight) {
+  // ScrollScaleFactor() blends from the 1500 fallback toward the
+  // adaptive value over the cold-start + blend window, so the bare
+  // RecordVirtualDesktop() calls a previous version of this test used
+  // returned 1500 regardless of resolution whenever the process-global
+  // frame counter was still inside that window (a test-ordering
+  // dependency). Reset the observer and warm it fully past
+  // kColdStartFrames + kBlendFrames so the blend alpha is 1.0 and the
+  // adaptive value is exact.
+  GetSignalObserver().Reset();
+  for (int i = 0; i < vmosue::kColdStartFrames + vmosue::kBlendFrames + 5;
+       ++i) {
+    GetSignalObserver().RecordScores(0.9f, 0.1f);  // advances frame count
+  }
+
   GetSignalObserver().RecordVirtualDesktop(1920, 1080);
   float s1080 = GetAdaptive().ScrollScaleFactor();
   GetSignalObserver().RecordVirtualDesktop(3840, 2160);
