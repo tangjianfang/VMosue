@@ -39,6 +39,9 @@ nlohmann::json ConfigToJson(const AppConfig& c) {
   j["dwellTimeMs"] = c.dwellTimeMs;
   j["antiInterference"] = c.antiInterference;
   j["showActionPreview"] = c.showActionPreview;
+  // v0.6.1: see AppConfig::showActionListOnLaunch. Persisted
+  // alongside the rest of the UX flags.
+  j["showActionListOnLaunch"] = c.showActionListOnLaunch;
   return j;
 }
 
@@ -73,6 +76,8 @@ AppConfig ConfigFromJson(const nlohmann::json& j) {
   }
   c.antiInterference = std::move(ai);
   c.showActionPreview = j.value("showActionPreview", c.showActionPreview);
+  c.showActionListOnLaunch =
+      j.value("showActionListOnLaunch", c.showActionListOnLaunch);
   return c;
 }
 

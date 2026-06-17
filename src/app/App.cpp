@@ -397,6 +397,18 @@ int App::Run() {
                                 std::chrono::seconds(3);
   bool tutorialAutoShown = !Config::Get().Data().showTutorialOnLaunch;
 
+  // v0.6.1: auto-show the action-list ("help") window ~5s after
+  // launch, slightly AFTER the tutorial's 3s deadline so the two
+  // don't stack on top of each other. The user reported being
+  // unable to operate ANY gesture; without an automatic nudge to
+  // the 3-action list, the first launch would just sit silent and
+  // the user would assume the app is broken. We also gate on
+  // Config::showActionListOnLaunch (default true) so a returning
+  // user can opt out without recompiling.
+  const auto helpLaunchAt = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(5);
+  bool helpAutoShown = !Config::Get().Data().showActionListOnLaunch;
+
   // Main thread pumps messages for ALL top-level windows on this
   // thread: the tray message-only window, the overlay, the debug
   // window, the settings dialog, and the tutorial window. The
@@ -433,6 +445,16 @@ int App::Run() {
         running_.load()) {
       tutorial_->Show();
       tutorialAutoShown = true;
+    }
+
+    // v0.6.1: help-launch deadline. Same pattern as the tutorial
+    // check above; runs AFTER the tutorial has had its 3s head
+    // start so the two windows don't fight for the foreground.
+    if (!helpAutoShown && help_ &&
+        std::chrono::steady_clock::now() >= helpLaunchAt &&
+        running_.load()) {
+      help_->Show();
+      helpAutoShown = true;
     }
   }
 

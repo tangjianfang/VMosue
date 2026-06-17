@@ -25,16 +25,28 @@ struct ActionRef {
   const char* descriptionKey; // "help.desc.pinch"
 };
 
-// The 7 supported one-shot / continuous actions. Order matters:
-// it is also the display order in ActionListWindow and the
-// tutorial step. Keep it stable.
-inline constexpr std::array<ActionRef, 7> kActionList = {{
+// v0.6.1: the 3 "must-work" actions. Every other action
+// (right-click, middle-click, scroll, double-click) has been
+// removed from the user-facing list because they require
+// fine-grained gesture discrimination the user reported as
+// unreliable ("我一个的无法正常操作"). The remaining 3 are
+// the gesture-mouse equivalent of "left click, hold-and-drag,
+// emergency stop" — everything else is a v1.x follow-up.
+//
+//   1. Pinch (thumb-index)        -> Left click
+//   2. Pinch and hold + move      -> Drag
+//   3. Open hand held 1s          -> Pause toggle
+//
+// The first two are the absolute minimum for a usable gesture
+// mouse; the third is the safety net. Users that need
+// right-click, scroll, etc. can hit F1 to see this list and
+// know they're not yet supported.
+//
+// Order matters: it is also the display order in
+// ActionListWindow. Keep it stable.
+inline constexpr std::array<ActionRef, 3> kActionList = {{
   {"gesture.pinch",        "action.leftClick",     "help.desc.pinch"},
-  {"gesture.pushForward",  "action.rightClick",    "help.desc.pushForward"},
-  {"gesture.thumbMiddle",  "action.middleClick",   "help.desc.thumbMiddle"},
-  {"gesture.pinchTwice",   "action.doubleClick",   "help.desc.pinchTwice"},
   {"gesture.pinchHold",    "action.drag",          "help.desc.pinchHold"},
-  {"gesture.twoFinger",    "action.scroll",        "help.desc.twoFinger"},
   {"gesture.openHand",     "action.pause",         "help.desc.openHand"},
 }};
 

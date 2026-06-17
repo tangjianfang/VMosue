@@ -38,10 +38,12 @@ class GestureStateMachine {
     // `pending_`. 0 disables the gate (legacy behavior, used by
     // unit tests and the action-map integration fixtures). The
     // production App's `Init` call is responsible for setting this
-    // to the user's configured value (default 1500ms) so the
+    // to the user's configured value (default 500ms) so the
     // test-suite's default-init path keeps the old "fire
-    // immediately" contract. Capped at 5000ms to keep the preview
-    // UI from looking broken.
+    // immediately" contract. 500ms is the production default —
+    // long enough to reject 1-2 frame phantom hands, short enough
+    // that a deliberate click is not painful. Capped at 5000ms
+    // to keep the preview UI from looking broken.
     int dwellMs = 0;
     int dwellCooldownMs = 400;
   };

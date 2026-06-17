@@ -369,24 +369,26 @@ void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
   swprintf_s(buf, L"  %.1fs", sec);
   text += buf;
 
-  // Anchor to the wrist with a small offset so the label sits
-  // above the hand rather than on top of it.
-  ScreenPoint anchor = LandmarkToScreen(f.landmarks[0],
-                                        virtX_, virtY_, virtW_, virtH_);
-  float textX = anchor.x + 20.0f;
-  float textY = anchor.y - 28.0f;
+  // v0.6.1: anchor the preview to the TOP-CENTER of the virtual
+  // desktop, not the wrist. The wrist-anchored layout from the
+  // initial v0.6 implementation was hard to see — the user is
+  // looking at the screen, not their hand. A fixed top-center
+  // position is always in the user's eye-line and large enough
+  // to read at a glance.
+  float textX = static_cast<float>(virtX_) +
+                (static_cast<float>(virtW_) - 360.0f) / 2.0f;
+  float textY = static_cast<float>(virtY_) + 60.0f;
 
   ID2D1SolidColorBrush* textBrush =
       brushes_[static_cast<int>(BrushTier::Text)];
   DrawOverlayText(rt, textBrush, textX, textY, text);
 
-  // Progress bar: 120px wide, 4px tall, sits just below the
-  // text. The full bar is the outline; the fill is the
-  // completed portion.
-  const float barW = 120.0f;
-  const float barH = 4.0f;
+  // Progress bar: 360px wide (matches the centered text x-extent
+  // above), 6px tall, sits just below the text.
+  const float barW = 360.0f;
+  const float barH = 6.0f;
   float barX = textX;
-  float barY = textY + 18.0f;
+  float barY = textY + 28.0f;
 
   ID2D1SolidColorBrush* pending =
       brushes_[static_cast<int>(BrushTier::Pending)];

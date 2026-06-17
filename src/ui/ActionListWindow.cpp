@@ -136,7 +136,10 @@ void ActionListWindow::CreateControls() {
 void ActionListWindow::RenderBody() {
   if (!hwndBody_) return;
   // Build "<gesture>  ->  <action>\n  <description>" rows,
-  // one per ActionRef, separated by a blank line.
+  // one per ActionRef, separated by a blank line. v0.6.1
+  // appends a footer note so the user understands what is NOT
+  // supported yet (right-click, scroll, etc.) — silent omission
+  // is what made the previous 7-action list confusing.
   std::wstring body;
   for (const auto& ref : kActionList) {
     std::wstring g = I18n::Get().TW(ref.gestureKey);
@@ -155,6 +158,14 @@ void ActionListWindow::RenderBody() {
     body += L"\n  ";
     body += d;
     body += L"\n\n";
+  }
+  // v0.6.1: explicit "what is NOT here" footer. Better that the
+  // user knows right-click / scroll are not in this build than
+  // to discover it by trying and failing.
+  std::wstring footer = I18n::Get().TW("help.footer");
+  if (!footer.empty() && footer != L"help.footer") {
+    body += L"\n";
+    body += footer;
   }
   SetWindowTextW(hwndBody_, body.c_str());
 }

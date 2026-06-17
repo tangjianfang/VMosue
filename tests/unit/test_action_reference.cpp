@@ -4,12 +4,12 @@
 using vmosue::ActionRef;
 using vmosue::kActionList;
 
-TEST(ActionReference, TableHasSevenRows) {
-  // v0.6 ship target: 7 actions (left/right/middle click, double
-  // click, drag, scroll, pause). The ActionListWindow layout
-  // hard-codes a fixed height; changing this count requires
-  // updating kWindowH.
-  EXPECT_EQ(kActionList.size(), 7u);
+TEST(ActionReference, TableHasThreeRows) {
+  // v0.6.1: the user-reported "I can't operate any of them"
+  // collapse from 7 to 3 "must-work" actions. The ActionListWindow
+  // layout is fixed-height, so changing this count requires
+  // updating kWindowH AND the footer text in {en,zh}.json.
+  EXPECT_EQ(kActionList.size(), 3u);
 }
 
 TEST(ActionReference, AllKeysAreNonEmpty) {

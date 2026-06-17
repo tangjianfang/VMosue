@@ -30,9 +30,11 @@ struct AppConfig {
   // asserted for this many ms before it fires. 0 disables the
   // gate (every action fires on the first frame it is true) —
   // the legacy behavior the test_action_map fixtures depend
-  // on. 1500ms is the production default; the SettingsWindow
-  // lets the user pick anything in [0, 3000] ms.
-  int  dwellTimeMs = 1500;
+  // on. 500ms is the production default — long enough to
+  // reject 1-2 frame phantom hands, short enough that a
+  // deliberate click is not painful. The SettingsWindow lets
+  // the user pick anything in [0, 3000] ms.
+  int  dwellTimeMs = 500;
   // v0.6: anti-interference strength. Drives the per-handedness
   // stability threshold (HandStabilityFilter) and the Python
   // min-hand-confidence argument. Valid values: "off", "low",
@@ -44,6 +46,13 @@ struct AppConfig {
   // but easy to disable for users who find the overlay
   // distracting.
   bool showActionPreview = true;
+  // v0.6.1: auto-show the 3-action list (F1 / "Action list" tray
+  // entry) on first launch, ~5s into the run. The user reported
+  // not knowing which gestures are supported — silently launching
+  // a gesture-mouse with no on-screen reference is what made the
+  // previous 7-action build feel unusable. Returning users can
+  // flip this off in %LOCALAPPDATA%\VMosue\config.json.
+  bool showActionListOnLaunch = true;
 };
 
 // Process-wide singleton holding the active AppConfig.
