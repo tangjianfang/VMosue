@@ -393,6 +393,16 @@ void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
   swprintf_s(buf, L"  %.1fs", sec);
   text += buf;
 
+  // v0.6.3: explicit cancel hint. The user reported "随便一动
+  // 它就瞎乱点" — their anxiety was that any sustained pinch
+  // could fire. Showing "(release to cancel)" right under the
+  // countdown makes the abort path obvious: pull the fingers
+  // apart (or take the hand out of frame) and the click won't
+  // fire. We draw this in a smaller white font on the line
+  // BELOW the main countdown so the eye reads the big yellow
+  // number first, then the "you can still back out" hint.
+  std::wstring cancelHint = I18n::Get().TW("preview.releaseToCancel");
+
   // v0.6.1: anchor the preview to the TOP-CENTER of the virtual
   // desktop, not the wrist. The wrist-anchored layout from the
   // initial v0.6 implementation was hard to see — the user is
@@ -416,6 +426,18 @@ void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
       brushes_[static_cast<int>(BrushTier::Text)];
   // 36pt bold — large enough to read at 1080p from a chair.
   DrawOverlayText(rt, textBrush, textX, textY, text, /*fontHeight=*/-36);
+
+  // v0.6.3: render the cancel hint just below the main text
+  // (smaller, white). Sits BETWEEN the text and the progress
+  // bar so the visual hierarchy is: "what's about to happen"
+  // (yellow, big) → "you can still cancel" (white, small) →
+  // "how close to firing" (progress bar). We skip drawing if
+  // i18n returned empty (defensive against missing key) so the
+  // preview never shows a stale "Lorem ipsum" placeholder.
+  if (!cancelHint.empty()) {
+    DrawOverlayText(rt, textBrush, textX, textY + 32.0f, cancelHint,
+                    /*fontHeight=*/-16);
+  }
 
   ID2D1SolidColorBrush* pending =
       brushes_[static_cast<int>(BrushTier::Pending)];

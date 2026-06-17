@@ -12,6 +12,7 @@
   "tutorial.welcome": "欢迎使用 VMosue",
   "error.camera_lost": "摄像头连接丢失，正在重连...",
   "preview.aboutTo": "即将执行：{action}",
+  "preview.releaseToCancel": "（松开可取消）",
   "action.leftClick": "左键单击",
   "action.drag": "拖拽",
   "action.pause": "暂停切换",

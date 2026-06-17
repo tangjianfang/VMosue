@@ -12,6 +12,7 @@
   "tutorial.welcome": "Welcome to VMosue",
   "error.camera_lost": "Camera connection lost. Reconnecting...",
   "preview.aboutTo": "About to: {action}",
+  "preview.releaseToCancel": "(release to cancel)",
   "action.leftClick": "Left click",
   "action.drag": "Drag",
   "action.pause": "Pause toggle",
