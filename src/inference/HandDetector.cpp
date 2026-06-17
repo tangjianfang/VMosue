@@ -666,7 +666,54 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
     // both pass. cfg_.minHandConfidence is no longer consulted here;
     // it's kept only as an absolute hard floor (0.3) inside the
     // adaptive controller.
+    //
+    // v0.6: the score gap alone is insufficient — a phantom with
+    // score 0.55 next to a second phantom at 0.50 has gap 0.05 and
+    // still passes the (top1+top2)/2 - 0.05 = 0.475 floor. The
+    // stronger anti-phantom signal is *temporal*: a real hand is
+    // above the floor for many consecutive frames; a phantom
+    // appears for 1-2 frames then disappears. The
+    // HandStabilityFilter below enforces kStabilityFrames=3
+    // consecutive-frame presence before a hand reaches the gesture
+    // pipeline, which is what >90% accuracy looks like in practice.
+    // We deliberately do NOT add a constant bias to the score floor
+    // here: that would also reject borderline-real hands in
+    // two-real-hand scenes (where the gap is small and any additive
+    // bias pushes the floor above top1's neighbor).
     float adaptiveFloor = GetAdaptive().MinHandScore();
+
+    // v0.6: pre-pass — update the per-handedness stability counters
+    // so a handedness that didn't appear this frame decrements its
+    // counter (down to 0, with a 1-frame forgiving cap). After this
+    // pass the filter's Accept() will return true for hands that
+    // have been above floor for >= kStabilityFrames (=3) frames.
+    {
+      const auto& hs = j.value("hands", nlohmann::json::array());
+      bool seen[HandStabilityFilter::kHandednessCount] = {false, false};
+      for (const auto& h : hs) {
+        std::string hand = h.value("handedness", "Right");
+        int h_int = (hand == "Left") ? 0 : 1;
+        float s = h.value("score", 0.0f);
+        if (s >= adaptiveFloor && h_int >= 0 &&
+            h_int < HandStabilityFilter::kHandednessCount) {
+          // Tickle the counter: Accept() returns false on the
+          // first few calls, that's fine — we only care that the
+          // counter incremented.
+          (void)stability_.Accept(h_int, s, adaptiveFloor);
+          seen[h_int] = true;
+        }
+      }
+      // Decrement counters for handedness that didn't appear
+      // (i.e. the model returned no hand at that handedness, or
+      // all hands of that handedness were below the floor). The
+      // Accept() decrement branch is single-frame-bounded, so
+      // missing 3 frames in a row zeroes the counter.
+      for (int k = 0; k < HandStabilityFilter::kHandednessCount; ++k) {
+        if (!seen[k]) stability_.Accept(k, /*score=*/0.0f,
+                                         /*floor=*/1.0f);
+      }
+    }
+
     out.reserve(hand_count);
     for (const auto& h : j.value("hands", nlohmann::json::array())) {
       HandLandmarks hl;
@@ -674,6 +721,22 @@ std::vector<HandLandmarks> HandDetector::Detect(const Frame& frame) {
       hl.handedness = (hand == "Left") ? 0 : 1;
       hl.score = h.value("score", 0.0f);
       if (hl.score < adaptiveFloor) continue;
+      // v0.6: also require the hand to have been above floor for
+      // kStabilityFrames consecutive frames. Phantom hands flicker;
+      // real hands stay put. We use the *un*-incremented filter by
+      // calling Accept once with a no-op: the pre-pass above already
+      // updated the counter; calling Accept again would over-count
+      // and potentially cross the threshold on the same frame the
+      // hand first appears. Instead, peek at CountForTest against
+      // kStabilityFrames.
+      if (hl.handedness < 0 ||
+          hl.handedness >= HandStabilityFilter::kHandednessCount) {
+        continue;
+      }
+      if (stability_.CountForTest(hl.handedness) <
+          HandStabilityFilter::kStabilityFrames) {
+        continue;
+      }
       const auto& lms = h.value("landmarks", nlohmann::json::array());
       int n = std::min<int>(static_cast<int>(lms.size()),
                             HandLandmarks::kNumPoints);

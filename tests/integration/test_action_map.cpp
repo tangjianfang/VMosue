@@ -285,7 +285,20 @@ static void expectOnly(const ActionSet& a,
 // apply and tests are order-independent.
 class ActionMap : public ::testing::Test {
  protected:
-  void SetUp() override { vmosue::GetSignalObserver().Reset(); }
+  void SetUp() override {
+    vmosue::GetSignalObserver().Reset();
+    // v0.6: legacy fixtures (1-3 frames) predate the
+    // dwell-time gate. Disable the gate for these tests so the
+    // existing assertions (left click fires on the first
+    // pinch, etc.) keep holding. The dwell gate's own
+    // contract is covered by tests/unit/test_dwell_gate.cpp.
+  }
+  static GestureStateMachine::Config MakeConfig() {
+    GestureStateMachine::Config cfg;
+    cfg.click.holdForDragMs = 100000;  // never let a stray pinch become a drag
+    cfg.dwellMs = 0;                    // disable v0.6 dwell gate
+    return cfg;
+  }
 };
 
 }  // namespace

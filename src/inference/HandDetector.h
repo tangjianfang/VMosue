@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "capture/Frame.h"
+#include "inference/HandStabilityFilter.h"
 #include "util/Result.h"
 
 // v0.3: HandDetector drives a Python subprocess (MediaPipe Hands).
@@ -82,6 +83,13 @@ class HandDetector {
   int InferenceWidth()  const { return cfg_.inferenceWidth; }
   int InferenceHeight() const { return cfg_.inferenceHeight; }
 
+  // v0.6: anti-phantom stability filter. Owned here (rather than in
+  // the inference loop) so it lives as long as the detector does;
+  // GestureStateMachine::Reset() also calls Reset() on it so a
+  // "phantom accepted" can't bleed across a Pause/Resume cycle.
+  void ResetStabilityFilter() { stability_.Reset(); }
+  const HandStabilityFilter& StabilityForTest() const { return stability_; }
+
   // Visible for testing: how many consecutive automatic respawns have
   // been attempted since the last healthy frame. Reset to 0 after any
   // successful Detect() round-trip.
@@ -100,6 +108,11 @@ class HandDetector {
   bool initialized_ = false;
   int respawnCount_ = 0;
   static constexpr int kMaxRespawns = 3;
+  // v0.6 anti-phantom filter state. Tracked per handedness; survives
+  // across Detect() calls so a hand has to be continuously above the
+  // adaptive floor for kStabilityFrames (=3) frames before it is
+  // surfaced to the gesture pipeline.
+  HandStabilityFilter stability_{};
   // v0.3: Python subprocess driving MediaPipe Hands. The full
   // definition of ChildHandles lives in HandDetector.cpp (it owns
   // Win32 HANDLEs whose dtor needs the complete type). We use a

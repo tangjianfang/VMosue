@@ -15,6 +15,14 @@ Result<void> GestureStateMachine::Init(const Config& c) {
   airClick_.SetConfig(c.airClick);
   scroll_.SetConfig(c.scroll);
   pause_.SetConfig(c.pause);
+  // v0.6: dwell-time calibration. Defaults to 1500ms (the
+  // user-facing setting); 0 disables the gate (legacy tests use
+  // this). Cooldown is short — just over the OS double-click
+  // window — so a held gesture doesn't spam clicks.
+  DwellGate::Config dc;
+  dc.dwellMs = c.dwellMs;
+  dc.cooldownMs = c.dwellCooldownMs;
+  dwell_.SetConfig(dc);
   return Result<void>::Ok({});
 }
 
@@ -50,6 +58,10 @@ void GestureStateMachine::Reset() {
   airClick_.Reset();
   scroll_.Reset();
   pause_.Reset();
+  // v0.6: also clear the dwell counter so a half-completed
+  // calibration cannot survive a Pause/Resume or any other
+  // explicit Reset.
+  dwell_.Reset();
   twoHandOpenActive_ = false;
   twoHandOpenStartMs_ = 0;
   std::lock_guard<std::mutex> lk(actionsMu_);
@@ -254,6 +266,11 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
         local.leftClick, local.leftDoubleClick, local.leftDown, local.leftUp,
         local.rightClick, local.middleClick);
   }
+  // v0.6: dwell-time calibration. Run `local` through the
+  // DwellGate; only continuously-asserted one-shot actions come
+  // out the other side. Cursor, wheel, and sustained LMB
+  // (leftDown/leftUp for drag) pass through unchanged.
+  ActionSet gated = dwell_.Process(local, ts);
   std::lock_guard<std::mutex> lk(actionsMu_);
   // Cursor target is an absolute screen position, not a delta. The
   // latest frame always wins: a slow consumer polling N frames of
@@ -262,19 +279,19 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
   // without a hand (cursorX == INT_MIN sentinel) keeps the previous
   // target visible until a new one arrives, so the OS cursor doesn't
   // visibly freeze between detections.
-  if (local.cursorX != INT_MIN) {
-    pending_.cursorX = local.cursorX;
-    pending_.cursorY = local.cursorY;
+  if (gated.cursorX != INT_MIN) {
+    pending_.cursorX = gated.cursorX;
+    pending_.cursorY = gated.cursorY;
   }
   pending_.wheel  += scrollDelta.dy;
   pending_.hWheel += scrollDelta.dx;
-  if (local.leftClick)       pending_.leftClick = true;
-  if (local.leftDoubleClick) pending_.leftDoubleClick = true;
-  if (local.leftDown)        pending_.leftDown = true;
-  if (local.leftUp)          pending_.leftUp = true;
-  if (local.rightClick)      pending_.rightClick = true;
-  if (local.middleClick)     pending_.middleClick = true;
-  if (local.safeRelease)     pending_.safeRelease = true;
+  if (gated.leftClick)       pending_.leftClick = true;
+  if (gated.leftDoubleClick) pending_.leftDoubleClick = true;
+  if (gated.leftDown)        pending_.leftDown = true;
+  if (gated.leftUp)          pending_.leftUp = true;
+  if (gated.rightClick)      pending_.rightClick = true;
+  if (gated.middleClick)     pending_.middleClick = true;
+  if (gated.safeRelease)     pending_.safeRelease = true;
 }
 
 ActionSet GestureStateMachine::ConsumeActions() {

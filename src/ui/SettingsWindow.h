@@ -83,6 +83,15 @@ class SettingsWindow {
   HWND hwndAutoStartChk_= nullptr;
   HWND hwndCalibBtn_    = nullptr;
   HWND hwndReadoutHeader_ = nullptr;
+  // v0.6: dwell-time slider + anti-interference dropdown +
+  // "show action preview" checkbox. Sits below the auto-start
+  // checkbox in a new "Calibration" section. These controls
+  // are saved to Config (and applied to the live state machine
+  // on next Init) like every other persisted setting.
+  HWND hwndDwellTrack_   = nullptr;
+  HWND hwndDwellReadout_ = nullptr;
+  HWND hwndAiCombo_      = nullptr;
+  HWND hwndPreviewChk_   = nullptr;
   std::array<HWND, kReadoutCount> hwndReadouts_{};
 };
 

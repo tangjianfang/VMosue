@@ -2,6 +2,7 @@
 
 #include "app/Watchdog.h"
 #include "config/Config.h"
+#include "gesture/DwellGate.h"
 #include "input/InputInjector.h"
 #include "platform/DisplayInfo.h"
 #include "platform/Hotkey.h"
@@ -168,6 +169,14 @@ int App::Run() {
   // a new in-app preference.
   GestureStateMachine::Config gcfg;
   gcfg.click.doubleClickWindowMs = DisplayInfo::SystemDoubleClickTimeMs();
+  // v0.6: pipe the user's dwell-time calibration setting into the
+  // state machine. Config::Data() is read-only (the worker threads
+  // read it without locking; updates apply on next Init). The
+  // default of 1500ms is the production v0.6 target — the test
+  // fixtures pass a 0ms dwell to keep the legacy "fire on first
+  // frame" semantics.
+  gcfg.dwellMs = Config::Get().Data().dwellTimeMs;
+  gcfg.dwellCooldownMs = 400;  // v0.6 ship target
   sm_.Init(gcfg);
 
   if (!overlay_.Init(nullptr)) VMOSUE_LOG_WARN("Overlay init failed");
@@ -226,6 +235,10 @@ int App::Run() {
       if (tutorial_) tutorial_->Show();
       else           VMOSUE_LOG_WARN("Tray: Tutorial unavailable");
     };
+    cb.onOpenHelp     = [this]()  {
+      if (help_) help_->Toggle();
+      else       VMOSUE_LOG_WARN("Tray: Action list unavailable");
+    };
     cb.onExit         = [this]() { VMOSUE_LOG_INFO("Tray: Exit requested"); Shutdown(); };
     if (!tray_.Init(trayMsgWnd_, cb)) {
       VMOSUE_LOG_WARN("Tray icon init failed");
@@ -282,6 +295,17 @@ int App::Run() {
     tutorial_.reset();
   }
 
+  // v0.6: build the action-list (help) window. Parented to the
+  // tray message window, shown on demand by the F1 hotkey or
+  // the tray's "Action list" menu item. Failure to create is
+  // non-fatal: the F1 callback and tray item log a warning if
+  // help_ is null.
+  help_ = std::make_unique<ActionListWindow>();
+  if (!help_->Init(trayMsgWnd_)) {
+    VMOSUE_LOG_WARN("ActionListWindow init failed");
+    help_.reset();
+  }
+
   // Task 21: register the two emergency-stop triggers. Both call into
   // the state machine which sets state_=EmergencyStopped, drains
   // pending actions, and runs SafeReleaseAll on the InputInjector.
@@ -290,6 +314,13 @@ int App::Run() {
   // also used by many apps to dismiss dialogs).
   Hotkey::RegisterCtrlAltG([this]() { sm_.EmergencyStop(); });
   Hotkey::RegisterEsc([this]() { sm_.EmergencyStop(); }, 1000);
+  // v0.6: F1 toggles the action-list help window. The watcher
+  // is edge-triggered (latches until the key is released) so a
+  // user holding F1 to keep the window open cannot trigger it
+  // repeatedly.
+  Hotkey::RegisterF1([this]() {
+    if (help_) help_->Toggle();
+  });
 
   // v0.3 (Task 37): camera + workers + watchdog all live in a
   // single background thread. The Media Foundation SourceReader
@@ -478,6 +509,12 @@ void App::Shutdown() {
   // debug window since both share the same parent and the debug
   // window's WM_DESTROY will pump a few final messages.
   if (tutorial_) tutorial_->Shutdown();
+  // v0.6: tear down the action-list (help) window. Same
+  // pattern as tutorial_: parented to the tray message window,
+  // so we destroy it BEFORE the tray window. The F1 hotkey is
+  // unregistered implicitly by Hotkey::Shutdown() further down
+  // (the watcher's thread join drops the registration).
+  if (help_) help_->Shutdown();
 
   // Task 26: tear the tray icon down BEFORE the message-only window.
   // Shell_NotifyIcon(NIM_DELETE) needs the HWND to be valid; if we
@@ -865,6 +902,22 @@ void App::stateMachineLoop() {
           if (h.handedness == 0) { fb.leftHandCount = 1; break; }
         }
         fb.paused = (sm_.State() == GlobalState::Paused);
+        // v0.6: pipe the DwellGate preview to the overlay so the
+        // user can see what action is currently counting down
+        // (and how much longer until it fires). The Preview is
+        // a value copy so we can read it past the next OnLandmarks
+        // call without racing the gesture thread.
+        auto prev = sm_.GetDwellPreview(NowMicros() / 1000);
+        if (prev.kind != DwellGate::Kind::None) {
+          fb.dwellActive = true;
+          // Kind ids: 0=None, 1=LeftClick, 2=RightClick,
+          // 3=MiddleClick, 4=DoubleClick. The overlay maps
+          // these to i18n keys.
+          fb.dwellActionId = static_cast<int>(prev.kind);
+          fb.dwellProgress = prev.progress;
+          fb.dwellRemainingMs = prev.remainingMs;
+          fb.dwellTotalMs = prev.totalMs;
+        }
         overlay_.Update(fb);
 
         // Emergency stop: the GestureStateMachine has tripped a safe

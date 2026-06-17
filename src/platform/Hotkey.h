@@ -36,6 +36,12 @@ class Hotkey {
   // Clear the Esc registration. Safe to call when not registered.
   static void UnregisterEsc();
 
+  // v0.6: F1 help hotkey. Fires on every F1 down-edge (latch pattern,
+  // same as Ctrl+Alt+G). Used to toggle the ActionListWindow.
+  static bool RegisterF1(std::function<void()> onTrigger);
+
+  static void UnregisterF1();
+
   // Stop the watcher thread and clear all registrations. Used by tests
   // and the App shutdown path to avoid leaks across process restarts in
   // the same address space.

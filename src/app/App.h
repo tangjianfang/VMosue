@@ -18,6 +18,7 @@
 #include "ui/SettingsWindow.h"
 #include "ui/TrayIcon.h"
 #include "ui/TutorialWindow.h"
+#include "ui/ActionListWindow.h"
 
 namespace vmosue {
 
@@ -125,6 +126,11 @@ class App {
   // message window so the parent's DestroyWindow can't pull the
   // child out from under it.
   std::unique_ptr<TutorialWindow> tutorial_;
+  // v0.6: modeless action-list help window. Created in Run() so
+  // the F1 hotkey callback and the tray "Action list" menu item
+  // can Show() it on demand. Shutdown() tears it down after the
+  // tray message window, same pattern as tutorial_.
+  std::unique_ptr<ActionListWindow> help_;
 
   // Task 26: a hidden message-only window that owns the tray icon
   // callbacks. TrayIcon::Shutdown() does NOT destroy this window;

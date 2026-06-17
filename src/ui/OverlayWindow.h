@@ -28,6 +28,18 @@ struct Feedback {
   // pixels.
   std::array<Point2F, 21> landmarks{};
   bool hasHand = false;
+  // v0.6: dwell-time action preview. dwellActive=true means
+  // DwellGate is currently counting down on `dwellActionId`
+  // (0=None, 1=LeftClick, 2=RightClick, 3=MiddleClick,
+  // 4=DoubleClick). dwellProgress 0..1, dwellRemainingMs and
+  // dwellTotalMs in ms. The overlay renders "About to: Left click
+  // 1.2s" + a progress bar so the user sees what is about to
+  // happen *before* the action fires.
+  bool  dwellActive = false;
+  int   dwellActionId = 0;
+  float dwellProgress = 0.0f;
+  int   dwellRemainingMs = 0;
+  int   dwellTotalMs = 0;
 };
 
 class OverlayWindow {
@@ -77,24 +89,32 @@ class OverlayWindow {
   void ResizeRenderTarget();
 
   // Cached solid-color brushes for the four hand-tier colors
-  // (paused, green, yellow, red). D2D brushes are bound to the
-  // render target that created them, so they must be released
-  // and re-created when ResizeRenderTarget() rebuilds the
-  // target. The cache turns 4 CreateSolidColorBrush + 4 Release
-  // calls per frame into zero in the common case (the color
-  // tier is stable across consecutive frames because confidence
-  // only changes when the hand does).
+  // (paused, green, yellow, red) plus a "Pending" yellow for the
+  // dwell-preview bar. D2D brushes are bound to the render target
+  // that created them, so they must be released and re-created
+  // when ResizeRenderTarget() rebuilds the target. The cache turns
+  // 4 CreateSolidColorBrush + 4 Release calls per frame into zero
+  // in the common case (the color tier is stable across
+  // consecutive frames because confidence only changes when the
+  // hand does).
   enum class BrushTier : int {
     Paused = 0,
     Green,
     Yellow,
     Red,
+    Pending,  // v0.6: dwell-preview bar + text color
+    Text,     // v0.6: white text for the "About to:" label
     Count,
   };
   std::array<ID2D1SolidColorBrush*, static_cast<int>(BrushTier::Count)>
       brushes_{};
   void CreateBrushes();
   void ReleaseBrushes();
+
+  // v0.6: render the dwell-preview text + progress bar on the
+  // overlay. `f.dwellActive` gates visibility; when false the
+  // helper is a no-op so the no-dwell path is zero-cost.
+  void DrawDwellPreview(ID2D1RenderTarget* rt, const Feedback& f);
 };
 
 }  // namespace vmosue

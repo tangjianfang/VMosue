@@ -2,6 +2,7 @@
 #include "ui/HandSkeleton.h"
 #include "ui/OverlayGeometry.h"
 #include "util/Adaptive.h"
+#include "util/I18n.h"
 #include "util/Logger.h"
 #include <d2d1.h>
 #include <d2d1helper.h>
@@ -148,16 +149,20 @@ void OverlayWindow::Update(const Feedback& f) {
 }
 
 void OverlayWindow::CreateBrushes() {
-  // All four brushes are created up-front so Render() never has
+  // All six brushes are created up-front so Render() never has
   // to hit CreateSolidColorBrush on the hot path. Colors match
   // the previous per-frame values: gray for paused, green /
-  // yellow / red for the three confidence tiers.
+  // yellow / red for the three confidence tiers, plus a bright
+  // yellow "Pending" for the dwell-preview bar and a white
+  // "Text" brush for the "About to:" label.
   if (!renderTarget_) return;
   const D2D1_COLOR_F colors[] = {
       D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.7f),  // Paused
       D2D1::ColorF(0.2f, 1.0f, 0.4f, 0.9f),  // Green
       D2D1::ColorF(1.0f, 1.0f, 0.2f, 0.9f),  // Yellow
       D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.9f),  // Red
+      D2D1::ColorF(1.0f, 0.85f, 0.1f, 0.95f),// Pending (v0.6)
+      D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f),// Text (v0.6)
   };
   for (int i = 0; i < static_cast<int>(BrushTier::Count); ++i) {
     if (brushes_[i]) continue;
@@ -248,6 +253,11 @@ void OverlayWindow::Render() {
             brush, 2.0f);
       }
     }
+    // v0.6: render the dwell-preview label + progress bar above
+    // the wrist joint. The user wanted to know what command is
+    // about to fire — this is the affordance. Drawn after the
+    // skeleton so it sits on top.
+    DrawDwellPreview(renderTarget_, f);
   }
   renderTarget_->EndDraw();
 }
@@ -270,6 +280,129 @@ void OverlayWindow::ResizeRenderTarget() {
       &renderTarget_);
   if (FAILED(hr)) {
     VMOSUE_LOG_WARN("OverlayWindow: render target recreate failed hr=0x{:x}", hr);
+  }
+}
+
+// Map a DwellGate::Kind to an i18n key. The keys live in
+// resources/i18n/{en,zh}.json; the lookup falls back to the key
+// itself if a translation is missing, so a partially-translated
+// build still shows something readable.
+static const char* DwellActionI18nKey(int actionId) {
+  switch (actionId) {
+    case 1: return "action.leftClick";
+    case 2: return "action.rightClick";
+    case 3: return "action.middleClick";
+    case 4: return "action.doubleClick";
+    default: return "";
+  }
+}
+
+// Render a single line of text via the D2D-GDI interop path.
+// Identical to DebugWindow::DrawLine; duplicated here so
+// OverlayWindow.cpp does not need to drag in the debug window
+// headers.
+static void DrawOverlayText(ID2D1RenderTarget* rt,
+                            ID2D1SolidColorBrush* brush,
+                            float x, float y, const std::wstring& s) {
+  if (!rt || !brush || s.empty()) return;
+  ID2D1GdiInteropRenderTarget* interop = nullptr;
+  if (FAILED(rt->QueryInterface(&interop))) return;
+  HDC hdc = nullptr;
+  if (FAILED(interop->GetDC(D2D1_DC_INITIALIZE_MODE_COPY, &hdc))) {
+    interop->Release();
+    return;
+  }
+  if (hdc) {
+    const D2D1_COLOR_F& c = brush->GetColor();
+    SetTextColor(hdc, RGB(
+        static_cast<int>(c.r * 255.0f),
+        static_cast<int>(c.g * 255.0f),
+        static_cast<int>(c.b * 255.0f)));
+    SetBkMode(hdc, TRANSPARENT);
+    TextOutW(hdc,
+             static_cast<int>(x),
+             static_cast<int>(y),
+             s.c_str(),
+             static_cast<int>(s.size()));
+    interop->ReleaseDC(nullptr);
+  }
+  interop->Release();
+}
+
+void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
+                                     const Feedback& f) {
+  // v0.6: dwell-preview. Caller (Render) has already gated on
+  // f.hasHand, so the preview only shows when the hand is
+  // visible. We anchor the label to the wrist (landmark 0) —
+  // fingertips move too much during a pinch to anchor
+  // reliably.
+  if (!f.dwellActive) return;
+  if (!rt) return;
+
+  const char* key = DwellActionI18nKey(f.dwellActionId);
+  if (!key || !*key) return;
+
+  // Compose the localized label. The "preview.aboutTo" i18n key
+  // resolves to "About to: {action}" or "即将执行：{action}". We
+  // support a {action} placeholder, falling back to a plain
+  // append if the value doesn't have one (future-proofing).
+  std::wstring label = I18n::Get().TW("preview.aboutTo");
+  std::wstring actionName = I18n::Get().TW(key);
+  if (actionName.empty()) actionName = L"action";
+
+  std::wstring text;
+  if (label.find(L"{action}") != std::wstring::npos) {
+    size_t pos = 0;
+    while ((pos = label.find(L"{action}", pos)) != std::wstring::npos) {
+      label.replace(pos, 8, actionName);
+      pos += actionName.size();
+    }
+    text = label;
+  } else {
+    text = label + L" " + actionName;
+  }
+
+  // Append the remaining-time countdown.
+  wchar_t buf[64];
+  float sec = f.dwellRemainingMs / 1000.0f;
+  if (sec < 0.0f) sec = 0.0f;
+  swprintf_s(buf, L"  %.1fs", sec);
+  text += buf;
+
+  // Anchor to the wrist with a small offset so the label sits
+  // above the hand rather than on top of it.
+  ScreenPoint anchor = LandmarkToScreen(f.landmarks[0],
+                                        virtX_, virtY_, virtW_, virtH_);
+  float textX = anchor.x + 20.0f;
+  float textY = anchor.y - 28.0f;
+
+  ID2D1SolidColorBrush* textBrush =
+      brushes_[static_cast<int>(BrushTier::Text)];
+  DrawOverlayText(rt, textBrush, textX, textY, text);
+
+  // Progress bar: 120px wide, 4px tall, sits just below the
+  // text. The full bar is the outline; the fill is the
+  // completed portion.
+  const float barW = 120.0f;
+  const float barH = 4.0f;
+  float barX = textX;
+  float barY = textY + 18.0f;
+
+  ID2D1SolidColorBrush* pending =
+      brushes_[static_cast<int>(BrushTier::Pending)];
+  if (!pending) return;
+
+  D2D1_RECT_F bg = D2D1::RectF(barX, barY, barX + barW, barY + barH);
+  rt->DrawRectangle(bg, pending, 1.0f);
+
+  float progress = f.dwellProgress;
+  if (progress < 0.0f) progress = 0.0f;
+  if (progress > 1.0f) progress = 1.0f;
+  if (progress > 0.0f) {
+    D2D1_RECT_F fill = D2D1::RectF(barX, barY,
+                                  barX + barW * progress,
+                                  barY + barH);
+    rt->FillRectangle(fill, pending);
   }
 }
 

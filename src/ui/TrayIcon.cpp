@@ -36,6 +36,7 @@ static constexpr UINT kIdOpenSettings  = 0x9002;
 static constexpr UINT kIdOpenDebug     = 0x9003;
 static constexpr UINT kIdOpenTutorial  = 0x9004;
 static constexpr UINT kIdExit          = 0x9005;
+static constexpr UINT kIdOpenHelp      = 0x9006;
 
 // Windows sends WM_USER (or NOTIFYICON_VERSION_4 selector) to the
 // HWND passed to Shell_NotifyIconNIM_ADD. lParam encodes which mouse
@@ -127,6 +128,7 @@ void TrayIcon::ShowContextMenu(HWND hwnd) {
   const std::wstring sSet    = I18n::Get().TW("tray.settings");
   const std::wstring sDbg    = I18n::Get().TW("tray.debug");
   const std::wstring sTut    = I18n::Get().TW("tray.tutorial");
+  const std::wstring sHelp   = I18n::Get().TW("tray.help");
   const std::wstring sExit   = I18n::Get().TW("tray.exit");
 
   AppendMenuW(m, MF_STRING, kIdTogglePause,
@@ -135,6 +137,7 @@ void TrayIcon::ShowContextMenu(HWND hwnd) {
   AppendMenuW(m, MF_STRING, kIdOpenSettings, sSet.c_str());
   AppendMenuW(m, MF_STRING, kIdOpenDebug,    sDbg.c_str());
   AppendMenuW(m, MF_STRING, kIdOpenTutorial, sTut.c_str());
+  AppendMenuW(m, MF_STRING, kIdOpenHelp,     sHelp.c_str());
   AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(m, MF_STRING, kIdExit,         sExit.c_str());
 
@@ -182,6 +185,9 @@ LRESULT CALLBACK TrayIcon::WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         return 0;
       case kIdOpenTutorial:
         if (g_tray->callbacks_.onOpenTutorial) g_tray->callbacks_.onOpenTutorial();
+        return 0;
+      case kIdOpenHelp:
+        if (g_tray->callbacks_.onOpenHelp) g_tray->callbacks_.onOpenHelp();
         return 0;
       case kIdExit:
         if (g_tray->callbacks_.onExit) g_tray->callbacks_.onExit();

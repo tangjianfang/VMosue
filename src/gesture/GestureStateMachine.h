@@ -4,41 +4,18 @@
 #include <vector>
 #include <cstdint>
 #include "inference/HandDetector.h"
+#include "gesture/ActionSet.h"
 #include "gesture/CursorController.h"
 #include "gesture/ClickDetector.h"
 #include "gesture/AirClickDetector.h"
 #include "gesture/ScrollDetector.h"
 #include "gesture/PauseDetector.h"
+#include "gesture/DwellGate.h"
 #include "util/Result.h"
 
 namespace vmosue {
 
 enum class GlobalState { Active, Paused, EmergencyStopped };
-
-struct ActionSet {
-  // Absolute target cursor position in virtual-screen pixels.
-  // Set every frame by CursorController from the primary hand's
-  // MCP pivot (landmark 5); consumed by InputInjector::SetCursorPos,
-  // which forwards to Win32 SetCursorPos. The video frame's [0,1]
-  // range maps 1:1 to the virtual desktop — see CursorController for
-  // the selfie-mirror flip on X.
-  //
-  // Sentinel: cursorX == INT_MIN means "no movement this frame" (hand
-  // not detected, paused, or skipped). cursorY is undefined in that
-  // case and must not be consumed. Intentionally NOT additive across
-  // frames — the latest absolute position always wins (a slow consumer
-  // pulling N frames worth of pending cursorX should jump to the
-  // freshest target, not accumulate deltas which don't exist here).
-  int cursorX = INT_MIN;
-  int cursorY = INT_MIN;
-  bool leftClick = false, leftDoubleClick = false;
-  bool leftDown = false, leftUp = false;
-  bool rightClick = false;
-  bool middleClick = false;
-  int wheel = 0;       // vertical wheel delta (positive = up)
-  int hWheel = 0;      // horizontal wheel delta (positive = right)
-  bool safeRelease = false;
-};
 
 class GestureStateMachine {
  public:
@@ -55,6 +32,18 @@ class GestureStateMachine {
     // EmergencyStop. Mirrors the hotkey path so the user has a
     // camera-only fallback if their keyboard is unreachable.
     int twoHandOpenHoldMs = 500;
+    // v0.6: dwell-time calibration. Each one-shot action (click,
+    // right-click, middle-click, double-click) must be continuously
+    // asserted for this many ms before it is published to
+    // `pending_`. 0 disables the gate (legacy behavior, used by
+    // unit tests and the action-map integration fixtures). The
+    // production App's `Init` call is responsible for setting this
+    // to the user's configured value (default 1500ms) so the
+    // test-suite's default-init path keeps the old "fire
+    // immediately" contract. Capped at 5000ms to keep the preview
+    // UI from looking broken.
+    int dwellMs = 0;
+    int dwellCooldownMs = 400;
   };
 
   Result<void> Init(const Config&);
@@ -66,6 +55,15 @@ class GestureStateMachine {
   GlobalState State() const { return state_.load(); }
   void Reset();
 
+  // v0.6: peek the DwellGate's current preview. Consumed by the
+  // overlay to render "About to: Left click 1.2s". Caller is
+  // expected to be on the gesture-state-machine thread (the gate
+  // state is mutated there). The returned struct is a value copy
+  // so the caller can keep it past the next OnLandmarks call.
+  DwellGate::Preview GetDwellPreview(int64_t nowMs) const {
+    return dwell_.CurrentPreview(nowMs);
+  }
+
  private:
   Config cfg_;
   CursorController cursor_;
@@ -73,6 +71,12 @@ class GestureStateMachine {
   AirClickDetector airClick_;
   ScrollDetector scroll_;
   PauseDetector pause_;
+  // v0.6: dwell-time calibration. Sits between the per-detector
+  // arbitration (which produces `local`) and the `pending_` write
+  // (which the consumer thread pulls). It re-publishes only the
+  // subset of `local` that has been continuously asserted for
+  // cfg.dwellMs.
+  DwellGate dwell_{};
   std::atomic<GlobalState> state_{GlobalState::Active};
   std::mutex actionsMu_;
   ActionSet pending_;

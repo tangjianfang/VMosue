@@ -29,6 +29,7 @@ namespace {
 std::mutex mu_;
 std::optional<std::function<void()>> g_ctrlAltG_;
 std::optional<std::function<void()>> g_esc_;
+std::optional<std::function<void()>> g_f1_;
 int g_escHoldMs_ = 1000;
 std::atomic<bool> running_{false};
 std::thread watcher_;
@@ -38,15 +39,18 @@ std::thread watcher_;
 // key cycled, which is confusing for the user.
 std::atomic<bool> gCtrlAltGArmed_{true};
 std::atomic<bool> gEscArmed_{true};
+std::atomic<bool> gF1Armed_{true};
 
 bool any_registered_locked() {
-  return g_ctrlAltG_.has_value() || g_esc_.has_value();
+  return g_ctrlAltG_.has_value() || g_esc_.has_value() ||
+         g_f1_.has_value();
 }
 
 void start_watcher_locked() {
   if (running_.exchange(true)) return;
   gCtrlAltGArmed_.store(true);
   gEscArmed_.store(true);
+  gF1Armed_.store(true);
   watcher_ = std::thread([]() {
     using namespace std::chrono;
     // Lambda-local edge-detection state. We do not use static-by-capture;
@@ -54,6 +58,7 @@ void start_watcher_locked() {
     // the watcher starts.
     bool gPrevDown = false;
     bool escPrevDown = false;
+    bool f1PrevDown = false;
     auto escDownSince = steady_clock::time_point{};
 
     while (running_.load()) {
@@ -61,16 +66,19 @@ void start_watcher_locked() {
       // Unregister+Register pair can't race with us reading them.
       std::optional<std::function<void()>> cbG;
       std::optional<std::function<void()>> cbEsc;
+      std::optional<std::function<void()>> cbF1;
       int escHoldMs = 1000;
       {
         std::lock_guard<std::mutex> lk(mu_);
         cbG = g_ctrlAltG_;
         cbEsc = g_esc_;
+        cbF1 = g_f1_;
         escHoldMs = g_escHoldMs_;
       }
 
       bool gArmed = gCtrlAltGArmed_.load();
       bool escArmed = gEscArmed_.load();
+      bool f1Armed = gF1Armed_.load();
 
 #ifdef _WIN32
       // Ctrl and Alt: GetAsyncKeyState returns the high bit set if the
@@ -80,6 +88,7 @@ void start_watcher_locked() {
       bool altDown  = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
       bool gDown    = (GetAsyncKeyState('G')        & 0x8000) != 0;
       bool escDown  = (GetAsyncKeyState(VK_ESCAPE)  & 0x8000) != 0;
+      bool f1Down   = (GetAsyncKeyState(VK_F1)      & 0x8000) != 0;
 
       // Ctrl+Alt+G: fire when all three are down AND we're armed.
       // After firing, latch `gArmed` low until G is released.
@@ -122,17 +131,37 @@ void start_watcher_locked() {
         }
         escPrevDown = escDown;
       }
+
+      // v0.6: F1 help. Edge-triggered: fire on the down->down
+      // transition only (no auto-repeat). Re-arm on key release.
+      if (cbF1) {
+        if (f1Down && !f1PrevDown && f1Armed) {
+          gF1Armed_.store(false);
+          try {
+            (*cbF1)();
+          } catch (...) {
+            VMOSUE_LOG_ERROR("F1 callback threw");
+          }
+        }
+        if (!f1Down && f1PrevDown) {
+          gF1Armed_.store(true);
+        }
+        f1PrevDown = f1Down;
+      }
 #else
       // Non-Windows parse-check path: do nothing.
       (void)gPrevDown;
       (void)escPrevDown;
+      (void)f1PrevDown;
       (void)escDownSince;
       (void)ctrlDown;
       (void)altDown;
       (void)gDown;
       (void)escDown;
+      (void)f1Down;
       (void)gArmed;
       (void)escArmed;
+      (void)f1Armed;
       (void)escHoldMs;
 #endif
 
@@ -168,6 +197,7 @@ void Hotkey::UnregisterCtrlAltG() {
     stop_watcher_locked();
     gCtrlAltGArmed_.store(true);
     gEscArmed_.store(true);
+    gF1Armed_.store(true);
   }
 }
 
@@ -188,6 +218,26 @@ void Hotkey::UnregisterEsc() {
     stop_watcher_locked();
     gCtrlAltGArmed_.store(true);
     gEscArmed_.store(true);
+    gF1Armed_.store(true);
+  }
+}
+
+bool Hotkey::RegisterF1(std::function<void()> onTrigger) {
+  if (!onTrigger) return false;
+  std::lock_guard<std::mutex> lk(mu_);
+  g_f1_ = std::move(onTrigger);
+  start_watcher_locked();
+  return true;
+}
+
+void Hotkey::UnregisterF1() {
+  std::lock_guard<std::mutex> lk(mu_);
+  g_f1_.reset();
+  if (!any_registered_locked()) {
+    stop_watcher_locked();
+    gCtrlAltGArmed_.store(true);
+    gEscArmed_.store(true);
+    gF1Armed_.store(true);
   }
 }
 
@@ -195,9 +245,11 @@ void Hotkey::Shutdown() {
   std::lock_guard<std::mutex> lk(mu_);
   g_ctrlAltG_.reset();
   g_esc_.reset();
+  g_f1_.reset();
   stop_watcher_locked();
   gCtrlAltGArmed_.store(true);
   gEscArmed_.store(true);
+  gF1Armed_.store(true);
 }
 
 }  // namespace vmosue

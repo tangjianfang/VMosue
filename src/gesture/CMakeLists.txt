@@ -16,6 +16,8 @@ add_library(vmosue_gesture STATIC
   GestureStateMachine.h
   GestureStateMachine.cpp
   HandOpen.h
+  DwellGate.h
+  DwellGate.cpp
 )
 target_include_directories(vmosue_gesture PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(vmosue_gesture PUBLIC vmosue_util vmosue_inference vmosue_input)

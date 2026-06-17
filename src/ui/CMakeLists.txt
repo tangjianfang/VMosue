@@ -1,4 +1,6 @@
 add_library(vmosue_ui STATIC
+  ActionListWindow.h
+  ActionListWindow.cpp
   DebugWindow.h
   DebugWindow.cpp
   OverlayWindow.h

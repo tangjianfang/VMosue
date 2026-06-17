@@ -27,6 +27,7 @@ class TrayIcon {
     std::function<void()> onOpenSettings;
     std::function<void()> onOpenDebug;
     std::function<void()> onOpenTutorial;
+    std::function<void()> onOpenHelp;
     std::function<void()> onExit;
   };
 

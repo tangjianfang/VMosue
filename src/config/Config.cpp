@@ -31,6 +31,14 @@ nlohmann::json ConfigToJson(const AppConfig& c) {
   j["autoStart"] = c.autoStart;
   j["showTutorialOnLaunch"] = c.showTutorialOnLaunch;
   j["logLevel"] = c.logLevel;
+  // v0.6: persist the dwell/anti-interference/preview settings
+  // so the user's choices survive a restart. The keys are
+  // explicit; we do NOT use a generic "v06Settings" object so
+  // the JSON is human-readable when the user opens the file
+  // with a text editor to debug it.
+  j["dwellTimeMs"] = c.dwellTimeMs;
+  j["antiInterference"] = c.antiInterference;
+  j["showActionPreview"] = c.showActionPreview;
   return j;
 }
 
@@ -52,6 +60,19 @@ AppConfig ConfigFromJson(const nlohmann::json& j) {
   // signals at runtime.
   (void)j.value("sensitivity", 1.0f);
   c.logLevel = j.value("logLevel", c.logLevel);
+  // v0.6: dwellTimeMs is clamped into [0, 5000] on read so a
+  // hand-edited config.json with a junk value (e.g. 99999999)
+  // cannot lock the user out of the gesture pipeline.
+  int dwell = j.value("dwellTimeMs", c.dwellTimeMs);
+  if (dwell < 0)    dwell = 0;
+  if (dwell > 5000) dwell = 5000;
+  c.dwellTimeMs = dwell;
+  std::string ai = j.value("antiInterference", c.antiInterference);
+  if (ai != "off" && ai != "low" && ai != "medium" && ai != "high") {
+    ai = "medium";
+  }
+  c.antiInterference = std::move(ai);
+  c.showActionPreview = j.value("showActionPreview", c.showActionPreview);
   return c;
 }
 

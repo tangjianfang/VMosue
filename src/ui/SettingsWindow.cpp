@@ -32,6 +32,11 @@ static constexpr UINT_PTR kIdPerfCombo      = 0xA002;
 static constexpr UINT_PTR kIdAutoStartChk   = 0xA005;
 static constexpr UINT_PTR kIdCalibBtn       = 0xA006;
 static constexpr UINT_PTR kIdReadoutTimer   = 0xA010;
+// v0.6: dwell-time trackbar + readout, anti-interference combo,
+// action-preview checkbox. IDs continue the existing A0xx range.
+static constexpr UINT_PTR kIdDwellTrack     = 0xA020;
+static constexpr UINT_PTR kIdAiCombo        = 0xA021;
+static constexpr UINT_PTR kIdPreviewChk     = 0xA022;
 
 // v0.5 (Wave 4): the live-readout section replaces the v0.4
 // sliders. WM_TIMER fires at 4 Hz — fast enough that the user
@@ -47,10 +52,11 @@ static constexpr UINT kReadoutTimerMs = 250;
 // gap, so a single column of 8 readouts takes about 200 px.
 static constexpr int kWindowW     = 480;
 // Window is tall enough to hold: camera (0), perf mode (1), header
-// (~150), 8 readouts at 22 px each, autostart, calibrate. Picked
-// 520 to leave some breathing room without overflowing typical
-// 1080p screens.
-static constexpr int kWindowH     = 520;
+// (~150), 8 readouts at 22 px each, autostart, calibrate, and the
+// v0.6 calibration section (dwell track, anti-interference combo,
+// preview checkbox) at ~140 more px. Picked 660 to keep all rows
+// visible on a 1080p screen without scrolling.
+static constexpr int kWindowH     = 660;
 static constexpr int kRowStart    = 20;
 static constexpr int kRowGap      = 56;
 static constexpr int kLabelX      = 16;
@@ -65,6 +71,40 @@ static constexpr int kReadoutRowH = 22;
 // AutoStart sits below the readout section.
 static constexpr int kAutoStartY  = kReadoutY + kReadoutRowH * 8;  // 332
 static constexpr int kCalibY      = kAutoStartY + kRowGap;         // 388
+// v0.6: calibration section. The section header sits one row
+// below the calibrate button; the dwell track, anti-interference
+// combo, and preview checkbox follow.
+static constexpr int kCalibHeaderY = kCalibY + kRowGap;            // 444
+static constexpr int kDwellTrackY  = kCalibHeaderY + 24;            // 468
+static constexpr int kAiComboY     = kDwellTrackY + kRowGap;         // 524
+static constexpr int kPreviewChkY  = kAiComboY + kRowGap;           // 580
+
+// Anti-interference combo options. Order matches
+// AppConfig::antiInterference. The visible label is a
+// human-friendly string; the saved value is the canonical "off"
+// / "low" / "medium" / "high" string.
+static const wchar_t* const kAiStrings[] = {
+    L"Off",
+    L"Low",
+    L"Medium",
+    L"High",
+};
+static const char* const kAiValues[] = {
+    "off",
+    "low",
+    "medium",
+    "high",
+};
+static constexpr int kAiCount =
+    sizeof(kAiStrings) / sizeof(kAiStrings[0]);
+
+// v0.6: dwell-time trackbar range. The user-visible range is
+// [0, 3000] ms in 100 ms steps; the saved value matches the
+// trackbar position so the slider position and the saved
+// number are 1:1.
+static constexpr int kDwellMinMs   = 0;
+static constexpr int kDwellMaxMs   = 3000;
+static constexpr int kDwellStepMs  = 100;
 
 // Performance-mode combo options. Order matches kPerfModeStrings
 // below; selected index maps directly to AppConfig::performanceMode.
@@ -260,6 +300,61 @@ void SettingsWindow::CreateControls() {
                                  kControlW, kControlH + 6,
                                  hwnd_, reinterpret_cast<HMENU>(kIdCalibBtn),
                                  hinst, nullptr);
+
+  // v0.6: calibration section header. Same header style as the
+  // v0.5 adaptive section: bold yellow text, single line.
+  CreateWindowEx(0, WC_STATIC,
+                 L"Calibration",
+                 WS_CHILD | WS_VISIBLE | SS_LEFT,
+                 kLabelX, kCalibHeaderY,
+                 kControlW + kLabelW, kControlH,
+                 hwnd_, nullptr, hinst, nullptr);
+
+  // v0.6: dwell-time trackbar. Range [0, 3000] ms, step 100.
+  // TBM_SETPOS is sent from LoadFromConfig once the HWND exists.
+  // We also build a static "ms" readout that refreshes on
+  // WM_HSCROLL so the user gets precise feedback while dragging.
+  hwndDwellTrack_ = CreateWindowEx(0, TRACKBAR_CLASSW, L"",
+                                   WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_AUTOTICKS,
+                                   kLabelX, kDwellTrackY,
+                                   kControlW + kLabelW, kControlH + 8,
+                                   hwnd_, reinterpret_cast<HMENU>(kIdDwellTrack),
+                                   hinst, nullptr);
+  SendMessageW(hwndDwellTrack_, TBM_SETRANGE, TRUE,
+               MAKELPARAM(kDwellMinMs, kDwellMaxMs));
+  SendMessageW(hwndDwellTrack_, TBM_SETPAGESIZE, 0, kDwellStepMs);
+
+  hwndDwellReadout_ = CreateWindowEx(0, WC_STATIC, L"1500 ms",
+                                     WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                     kLabelX, kDwellTrackY + kControlH + 4,
+                                     kControlW + kLabelW, kControlH,
+                                     hwnd_, nullptr, hinst, nullptr);
+
+  // v0.6: anti-interference combo. Order matches kAiStrings /
+  // kAiValues above. The visible label is human-readable
+  // (Off/Low/Medium/High); the saved value is the canonical
+  // string ("off" / "low" / etc.).
+  hwndAiCombo_ = CreateWindowEx(0, WC_COMBOBOX, L"",
+                                WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST,
+                                kControlX, kAiComboY,
+                                kControlW, kControlH + 60,
+                                hwnd_, reinterpret_cast<HMENU>(kIdAiCombo),
+                                hinst, nullptr);
+  for (int i = 0; i < kAiCount; ++i) {
+    SendMessageW(hwndAiCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(kAiStrings[i]));
+  }
+
+  // v0.6: show-action-preview checkbox. On by default. The
+  // user can disable it if the on-screen countdown is
+  // distracting in their workflow (e.g. screen recording).
+  hwndPreviewChk_ = CreateWindowEx(0, WC_BUTTON,
+                                   L"Show action preview on screen",
+                                   WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+                                   kLabelX, kPreviewChkY,
+                                   kControlW + kLabelW, kControlH,
+                                   hwnd_, reinterpret_cast<HMENU>(kIdPreviewChk),
+                                   hinst, nullptr);
 }
 
 void SettingsWindow::PopulateCameras() {
@@ -339,6 +434,38 @@ void SettingsWindow::LoadFromConfig() {
     SendMessageW(hwndAutoStartChk_, BM_SETCHECK,
                  AutoStart::IsEnabled() ? BST_CHECKED
                                         : BST_UNCHECKED, 0);
+  }
+
+  // v0.6: dwell-time trackbar. The saved value is in ms in
+  // [0, 5000]; the trackbar's max is 3000, so values above the
+  // visible range are clamped for the slider but the underlying
+  // value is preserved (Config::Data() returns the full 0-5000).
+  if (hwndDwellTrack_) {
+    int pos = cfg.dwellTimeMs;
+    if (pos < kDwellMinMs) pos = kDwellMinMs;
+    if (pos > kDwellMaxMs) pos = kDwellMaxMs;
+    SendMessageW(hwndDwellTrack_, TBM_SETPOS, TRUE, pos);
+  }
+  if (hwndDwellReadout_) {
+    wchar_t buf[32];
+    swprintf_s(buf, L"%d ms", cfg.dwellTimeMs);
+    SetWindowTextW(hwndDwellReadout_, buf);
+  }
+
+  // v0.6: anti-interference combo. Map the saved string to the
+  // combo index; unknown values fall back to "Medium" (index 2).
+  if (hwndAiCombo_) {
+    int aiIdx = 2;  // default "medium"
+    for (int i = 0; i < kAiCount; ++i) {
+      if (cfg.antiInterference == kAiValues[i]) { aiIdx = i; break; }
+    }
+    SendMessageW(hwndAiCombo_, CB_SETCURSEL, aiIdx, 0);
+  }
+
+  // v0.6: show-action-preview checkbox.
+  if (hwndPreviewChk_) {
+    SendMessageW(hwndPreviewChk_, BM_SETCHECK,
+                 cfg.showActionPreview ? BST_CHECKED : BST_UNCHECKED, 0);
   }
 }
 
@@ -427,6 +554,34 @@ void SettingsWindow::SaveToConfig() {
   if (hwndAutoStartChk_) {
     LRESULT state = SendMessageW(hwndAutoStartChk_, BM_GETCHECK, 0, 0);
     cfg.autoStart = (state == BST_CHECKED);
+  }
+
+  // v0.6: dwell-time trackbar. Read the slider position back
+  // into the config. The trackbar's range is [0, 3000]; we
+  // store the same ms value the user sees on the readout.
+  if (hwndDwellTrack_) {
+    int pos = static_cast<int>(SendMessageW(hwndDwellTrack_,
+                                             TBM_GETPOS, 0, 0));
+    if (pos < 0) pos = 0;
+    if (pos > 5000) pos = 5000;  // allow the rare 3000-5000
+                                // range to round-trip, even
+    // though the slider can't reach it
+    cfg.dwellTimeMs = pos;
+  }
+
+  // v0.6: anti-interference combo. Map the index back to the
+  // canonical "off" / "low" / "medium" / "high" string.
+  if (hwndAiCombo_) {
+    int sel = static_cast<int>(SendMessageW(hwndAiCombo_,
+                                             CB_GETCURSEL, 0, 0));
+    if (sel < 0 || sel >= kAiCount) sel = 2;  // medium default
+    cfg.antiInterference = kAiValues[sel];
+  }
+
+  // v0.6: show-action-preview checkbox.
+  if (hwndPreviewChk_) {
+    LRESULT state = SendMessageW(hwndPreviewChk_, BM_GETCHECK, 0, 0);
+    cfg.showActionPreview = (state == BST_CHECKED);
   }
 
   auto res = Config::Get().Save();
@@ -541,6 +696,23 @@ LRESULT CALLBACK SettingsWindow::WndProc(HWND hwnd, UINT msg,
       }
       // Combo / checkbox edits are reflected in the live label and
       // persisted on close; nothing to do here for v0.5.
+      return 0;
+    }
+
+    case WM_HSCROLL: {
+      // v0.6: dwell-time trackbar. The slider is parented to
+      // this window so we get the WM_HSCROLL here. Update the
+      // "ms" readout so the user sees the precise value while
+      // dragging. Persisted value is written on WM_CLOSE via
+      // SaveToConfig; this is a live preview only.
+      if (reinterpret_cast<HWND>(l) == self->hwndDwellTrack_ &&
+          self->hwndDwellReadout_) {
+        int pos = static_cast<int>(SendMessageW(self->hwndDwellTrack_,
+                                                 TBM_GETPOS, 0, 0));
+        wchar_t buf[32];
+        swprintf_s(buf, L"%d ms", pos);
+        SetWindowTextW(self->hwndDwellReadout_, buf);
+      }
       return 0;
     }
 

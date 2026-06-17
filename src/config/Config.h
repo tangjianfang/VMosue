@@ -25,6 +25,25 @@ struct AppConfig {
   bool autoStart = false;
   bool showTutorialOnLaunch = true;
   std::string logLevel = "info";
+  // v0.6: dwell-time calibration. Each one-shot action
+  // (left/right/middle/double click) must be continuously
+  // asserted for this many ms before it fires. 0 disables the
+  // gate (every action fires on the first frame it is true) —
+  // the legacy behavior the test_action_map fixtures depend
+  // on. 1500ms is the production default; the SettingsWindow
+  // lets the user pick anything in [0, 3000] ms.
+  int  dwellTimeMs = 1500;
+  // v0.6: anti-interference strength. Drives the per-handedness
+  // stability threshold (HandStabilityFilter) and the Python
+  // min-hand-confidence argument. Valid values: "off", "low",
+  // "medium", "high". Anything else falls back to "medium".
+  std::string antiInterference = "medium";
+  // v0.6: render the "About to: <action>" label and progress
+  // bar in the overlay while DwellGate is counting down. On by
+  // default — the user explicitly asked for the affordance —
+  // but easy to disable for users who find the overlay
+  // distracting.
+  bool showActionPreview = true;
 };
 
 // Process-wide singleton holding the active AppConfig.
