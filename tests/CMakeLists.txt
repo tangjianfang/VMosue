@@ -31,6 +31,7 @@ add_executable(vmosue_tests
   unit/test_hand_stability_filter.cpp
   unit/test_dwell_gate.cpp
   unit/test_action_reference.cpp
+  unit/test_hand_detector_confidence_map.cpp
   integration/test_pipeline_e2e.cpp
   integration/test_action_map.cpp
   # Watchdog is a standalone utility compiled into the vmosue

@@ -150,6 +150,14 @@ int App::Run() {
   // gesture math is resolution-independent.
   hcfg.inferenceWidth = 320;
   hcfg.inferenceHeight = 240;
+  // v0.6: pipe the user's antiInterference setting into the
+  // Python detector's min-hand-confidence. The C++ side's
+  // HandStabilityFilter still applies on top of this — defense
+  // in depth, in case the Python detector reports a phantom
+  // above the configured confidence. The mapping lives on
+  // HandDetector so unit tests can verify the table directly.
+  hcfg.minHandConfidence = HandDetector::MinHandConfidenceForAntiInterference(
+      Config::Get().Data().antiInterference);
   if (!detector_.Init(hcfg).isOk()) {
     VMOSUE_LOG_ERROR("HandDetector init failed");
     return 1;

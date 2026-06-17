@@ -95,6 +95,22 @@ class HandDetector {
   // successful Detect() round-trip.
   int RespawnCount() const { return respawnCount_; }
 
+  // v0.6: map the user-facing antiInterference string to a
+  // numeric min-hand-confidence forwarded to MediaPipe. The
+  // mapping is intentionally coarse — the per-handedness
+  // HandStabilityFilter on the C++ side is the stronger
+  // anti-phantom signal; this is just a pre-filter at the
+  // detector's own confidence gate. The App also applies the
+  // same mapping when it constructs the HandDetector::Config,
+  // so unit tests can verify the table directly.
+  static float MinHandConfidenceForAntiInterference(
+      const std::string& antiInterference) {
+    if (antiInterference == "off")  return 0.4f;
+    if (antiInterference == "low")  return 0.5f;
+    if (antiInterference == "high") return 0.7f;
+    return 0.6f;  // "medium" or unknown
+  }
+
  private:
   // Attempt to bring the Python subprocess back up after it has died
   // (GetExitCodeProcess != STILL_ACTIVE) or after an I/O failure.
