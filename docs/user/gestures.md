@@ -4,6 +4,10 @@ This page lists every gesture VMosue recognises. Each gesture has a
 small text diagram — visual aids (screenshots / video) will be added
 in a future release.
 
+> **Developers / QA:** for the precise landmark-and-threshold
+> definition of each gesture and its mapped action, see
+> [gesture-action-map.md](gesture-action-map.md).
+
 ## Quick reference
 
 | Gesture | Hand | Motion | Action |
