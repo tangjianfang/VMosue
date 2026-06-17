@@ -950,6 +950,22 @@ void App::stateMachineLoop() {
           fb.dwellRemainingMs = prev.remainingMs;
           fb.dwellTotalMs = prev.totalMs;
         }
+        // v0.6.2: pipe the settle-in grace status. While the
+        // grace window is open the overlay renders a visible
+        // "Calibrating... 1.2s" countdown so the user can see
+        // the system is alive but waiting. When the window
+        // just ended we set settlingJustEnded so the overlay
+        // can flash a brief "✓ Ready" indicator.
+        int64_t nowMs = NowMicros() / 1000;
+        auto sett = sm_.GetSettlingStatus(nowMs);
+        if (sett.active) {
+          fb.settlingActive = true;
+          fb.settlingRemainingMs = sett.remainingMs;
+          fb.settlingTotalMs = sett.totalMs;
+        }
+        if (sm_.ConsumeSettlingJustEnded()) {
+          fb.settlingJustEnded = true;
+        }
         overlay_.Update(fb);
 
         // Emergency stop: the GestureStateMachine has tripped a safe

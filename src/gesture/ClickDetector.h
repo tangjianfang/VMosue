@@ -38,6 +38,16 @@ class ClickDetector {
   ClickEvent OnLandmarks(const HandLandmarks& right, int64_t timestampMs);
   void Reset();
 
+  // v0.6.2: read-only view of the current pinch state. DwellGate uses
+  // this to know whether the user is still sustaining the pinch, so
+  // it can accumulate dwell across consecutive frames and only
+  // commit the click on the release frame. Returns true while in
+  // Pinching or Held phase (i.e., fingers are close enough to count
+  // as a sustained pinch).
+  bool IsLeftPinching() const { return phase_ == Phase::Pinching ||
+                                       phase_ == Phase::Held; }
+  bool IsMiddlePinching() const { return middlePhase_ == MiddlePhase::Pinching; }
+
  private:
   enum class Phase { Idle, Pinching, Held };
   Config cfg_;

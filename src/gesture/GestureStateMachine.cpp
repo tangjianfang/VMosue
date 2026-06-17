@@ -71,6 +71,7 @@ void GestureStateMachine::Reset() {
   lastHandSeenMs_ = 0;
   graceStartMs_ = 0;
   handSeenLastFrame_ = false;
+  lastSettlingActive_ = false;
   std::lock_guard<std::mutex> lk(actionsMu_);
   pending_ = {};
   // Default-init leaves cursorX at INT_MIN (sentinel = "no target"),
@@ -250,11 +251,30 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
     // Flush the wheel deltas so a downstream consumer (e.g. App)
     // still sees the scroll input -- it would otherwise be lost
     // until the next frame happens to have both hands.
-    if (scrollDelta.dy != 0 || scrollDelta.dx != 0) {
-      std::lock_guard<std::mutex> lk(actionsMu_);
-      pending_.wheel  += scrollDelta.dy;
-      pending_.hWheel += scrollDelta.dx;
+    //
+    // v0.6.2 bug fix: we also MUST run DwellGate.Process() with an
+    // empty ActionSet so it can DISARM any slots that were armed by
+    // a now-disappeared pinch. Without this, a 5-frame phantom burst
+    // (which armed the LeftClick slot) leaves the slot armed
+    // through 30+ frames of no-hand input, and the first later
+    // frame that DOES emit a release event (e.g. the user opens
+    // their hand) commits the click -- 19 spurious clicks out of
+    // 20 phantom cycles in test_phantom_e2e.cpp. By passing an
+    // empty ActionSet to DwellGate here, every no-hand frame
+    // advances DwellGate's view of "no gesture is held right now"
+    // and the slot disarms correctly.
+    ActionSet empty{};
+    ActionSet gated = dwell_.Process(empty, ts);
+    if (gated.cursorX != INT_MIN || gated.leftClick ||
+        gated.leftDoubleClick || gated.leftDown || gated.leftUp ||
+        gated.rightClick || gated.middleClick || gated.safeRelease) {
+      // No primary hand → no cursor target and no button events to
+      // publish. The scroll-only branch below already wrote wheel.
+      // Nothing else to do.
     }
+    std::lock_guard<std::mutex> lk(actionsMu_);
+    pending_.wheel  += scrollDelta.dy;
+    pending_.hWheel += scrollDelta.dx;
     return;
   }
 
@@ -277,6 +297,20 @@ void GestureStateMachine::OnLandmarks(const std::vector<HandLandmarks>& hands, i
     case ClickEvent::MiddleClick:     local.middleClick = true; break;    // thumb-middle pinch
     default: break;
   }
+  // v0.6.2: feed the DwellGate the *gesture-held* signals so it
+  // can accumulate dwell across consecutive frames. ClickDetector
+  // emits the one-shot release events above (LeftClick on release
+  // frame, MiddleClick on release frame) but the *Held booleans
+  // must be read AFTER OnLandmarks() because that call updates the
+  // phase_ state machine. For the release frame specifically, the
+  // phase has already transitioned back to Idle so IsLeftPinching()
+  // is false — exactly the moment the DwellGate commits.
+  local.leftPinchHeld    = click_.IsLeftPinching();
+  local.middlePinchHeld  = click_.IsMiddlePinching();
+  // Same wiring for the air-click (right-click): IsApproaching()
+  // reflects the post-update state, which on the retreat frame is
+  // false (just transitioned to Idle).
+  local.rightPushHeld    = airClick_.IsApproaching();
   // Right-click (push-toward-camera) arbitration. The air-click and
   // pinch detectors run on the same hand independently, so a frame
   // that both ends a pinch-drag (leftUp) and completes a forward

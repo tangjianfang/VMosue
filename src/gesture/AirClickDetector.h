@@ -19,6 +19,12 @@ class AirClickDetector {
   AirClickEvent OnLandmarks(const HandLandmarks& right, int64_t ts);
   void Reset();
 
+  // v0.6.2: true while the index fingertip is in the "Approach"
+  // phase (pushed toward camera). DwellGate uses this as the
+  // right-click-held signal so the air-click dwell accumulates
+  // across consecutive frames and only commits on the retreat.
+  bool IsApproaching() const { return phase_ == Phase::Approach; }
+
  private:
   // Two-phase model: Idle waits for the index fingertip to push toward
   // the camera (Approach); Approach waits for it to retract within the

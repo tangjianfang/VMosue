@@ -77,6 +77,47 @@ class GestureStateMachine {
     return dwell_.CurrentPreview(nowMs);
   }
 
+  // v0.6.2: settle-in grace status. Caller (App.cpp) reads
+  // this to populate the Feedback fields consumed by the
+  // overlay, which renders "Calibrating... 1.2s" while
+  // `active` is true. The state machine owns the canonical
+  // truth (which hand is visible, when the grace timer
+  // started) — the overlay just renders what it's told.
+  struct SettlingStatus {
+    bool active = false;
+    int remainingMs = 0;
+    int totalMs = 0;
+  };
+  SettlingStatus GetSettlingStatus(int64_t nowMs) const {
+    SettlingStatus s;
+    if (cfg_.firstHandGraceMs <= 0 || graceStartMs_ == 0) return s;
+    int64_t elapsed = nowMs - graceStartMs_;
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed >= cfg_.firstHandGraceMs) return s;
+    s.active = true;
+    s.remainingMs = static_cast<int>(cfg_.firstHandGraceMs - elapsed);
+    s.totalMs = cfg_.firstHandGraceMs;
+    return s;
+  }
+
+  // v0.6.2: detect the active->inactive transition so the
+  // overlay can flash "✓ Ready" for ~800ms after grace ends.
+  // Returns true on the frame the grace gate flipped off;
+  // false afterwards. Caller stores the result and clears it
+  // once the overlay has rendered the flash at least once.
+  // We deliberately don't use a callback here — the overlay
+  // is allowed to miss the transition (e.g. the user has the
+  // app focused elsewhere) and the user just doesn't see the
+  // flash. The grace itself is still enforced by
+  // GetSettlingStatus / the OnLandmarks gate.
+  bool ConsumeSettlingJustEnded() {
+    bool wasActive = lastSettlingActive_;
+    bool isActive = (cfg_.firstHandGraceMs > 0 && graceStartMs_ != 0 &&
+                     (lastHandSeenMs_ - graceStartMs_) < cfg_.firstHandGraceMs);
+    lastSettlingActive_ = isActive;
+    return wasActive && !isActive;
+  }
+
  private:
   Config cfg_;
   CursorController cursor_;
@@ -113,6 +154,9 @@ class GestureStateMachine {
   int64_t lastHandSeenMs_ = 0;
   int64_t graceStartMs_ = 0;
   bool handSeenLastFrame_ = false;
+  // v0.6.2: edge-detect the grace window so the overlay can
+  // flash "✓ Ready" exactly once when it ends.
+  bool lastSettlingActive_ = false;
 };
 
 }  // namespace vmosue

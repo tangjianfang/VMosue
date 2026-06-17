@@ -30,6 +30,21 @@ struct ActionSet {
   int wheel = 0;       // vertical wheel delta (positive = up)
   int hWheel = 0;      // horizontal wheel delta (positive = right)
   bool safeRelease = false;
+  // v0.6.2: "gesture currently held" signals. The DwellGate needs to
+  // know whether the user is *sustaining* a pinch / push / middle-
+  // pinch RIGHT NOW (not just the release event) because the dwell
+  // must accumulate dwellMs of CONTINUOUS assertion before the
+  // release event is allowed to fire. leftClick=true means "the user
+  // just released"; leftPinchHeld=true means "the user is still
+  // pinching this frame". The two are different signals on different
+  // frames: during sustained pinch, only leftPinchHeld=true; on the
+  // release frame, both become momentarily ambiguous (ClickDetector
+  // has transitioned out of Pinching phase so IsLeftPinching()
+  // returns false, but leftClick is true) — that release frame is
+  // exactly when DwellGate commits.
+  bool leftPinchHeld = false;
+  bool middlePinchHeld = false;
+  bool rightPushHeld = false;  // air-push toward camera (for right-click dwell)
 };
 
 }  // namespace vmosue

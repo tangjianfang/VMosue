@@ -253,6 +253,13 @@ void OverlayWindow::Render() {
             brush, 2.0f);
       }
     }
+    // v0.6.2: render the settle-in countdown. We do this
+    // BEFORE the dwell preview so the two never overlap on
+    // screen (the dwell countdown only appears once the
+    // user is past the grace window, but if both somehow
+    // happen on the same frame the dwell preview takes
+    // visual priority).
+    DrawSettlingCountdown(renderTarget_, f);
     // v0.6: render the dwell-preview label + progress bar above
     // the wrist joint. The user wanted to know what command is
     // about to fire — this is the affordance. Drawn after the
@@ -454,6 +461,60 @@ void OverlayWindow::DrawDwellPreview(ID2D1RenderTarget* rt,
                                   barY + barH);
     rt->FillRectangle(fill, pending);
   }
+}
+
+// v0.6.2: render the "Calibrating... 1.2s" countdown while the
+// settle-in grace gate is open, and a brief "✓ Ready" flash when
+// it ends. Layout: same top-center anchor as the dwell preview,
+// but ~30px above it so the two never overlap. The flash uses
+// the Text brush (white) for the checkmark and the Pending
+// brush (yellow) for the trailing "Ready" word.
+void OverlayWindow::DrawSettlingCountdown(ID2D1RenderTarget* rt,
+                                          const Feedback& f) {
+  if (!rt) return;
+  // Settling is gated by `settlingActive`; the "just ended"
+  // flash is gated by `settlingJustEnded`. Both are false in
+  // the steady-state so this helper is a no-op in the common
+  // case (zero per-frame cost on the hot path).
+  if (!f.settlingActive && !f.settlingJustEnded) return;
+  if (f.settlingActive && f.settlingTotalMs <= 0) return;
+
+  const float barW = 520.0f;
+  float textX = static_cast<float>(virtX_) +
+                (static_cast<float>(virtW_) - barW) / 2.0f;
+  // Sit ~30px above the dwell preview (which is at virtY + 80).
+  // This way both can be visible at once: settling on the
+  // upper line, dwell countdown on the lower line.
+  float textY = static_cast<float>(virtY_) + 24.0f;
+
+  ID2D1SolidColorBrush* textBrush =
+      brushes_[static_cast<int>(BrushTier::Text)];
+  if (!textBrush) return;
+
+  std::wstring text;
+  if (f.settlingActive) {
+    // "Calibrating... 1.2s" — built directly to avoid an
+    // i18n lookup on the hot path. The text is short enough
+    // that hardcoding is fine; if a translation is later
+    // needed we can add a "settling.countdown" key.
+    int tenths = (f.settlingRemainingMs + 50) / 100;
+    if (tenths < 0) tenths = 0;
+    int wholeSec = tenths / 10;
+    int frac = tenths % 10;
+    wchar_t buf[64];
+    swprintf_s(buf, L"Calibrating... %d.%ds  (waiting for stable hand)",
+               wholeSec, frac);
+    text = buf;
+  } else {
+    // settlingJustEnded: brief "✓ Ready" flash. We don't
+    // gate this by a duration — the caller is expected to
+    // clear settlingJustEnded after ~one frame. If the user
+    // misses it, the next dwell countdown will appear in
+    // the same screen region so they'll know the system is
+    // live.
+    text = L"Ready";
+  }
+  DrawOverlayText(rt, textBrush, textX, textY, text, /*fontHeight=*/-28);
 }
 
 }  // namespace vmosue

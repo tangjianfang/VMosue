@@ -40,6 +40,21 @@ struct Feedback {
   float dwellProgress = 0.0f;
   int   dwellRemainingMs = 0;
   int   dwellTotalMs = 0;
+  // v0.6.2: settle-in grace countdown. settlingActive=true means
+  // the "first hand seen" grace gate is currently suppressing
+  // action publication (the user just brought their hand into
+  // frame and is still getting a comfortable pinch pose). The
+  // overlay renders "Calibrating... 1.2s" so the user can SEE
+  // that the system is alive and waiting — without this the
+  // grace window felt like "the app is broken" because the
+  // cursor moved but nothing fired. After settlingActive flips
+  // to false, settlingJustEnded stays true for ~800ms so the
+  // overlay can flash a brief "✓ Ready" indicator and the user
+  // knows the system is now live.
+  bool  settlingActive = false;
+  int   settlingRemainingMs = 0;
+  int   settlingTotalMs = 0;
+  bool  settlingJustEnded = false;
 };
 
 class OverlayWindow {
@@ -115,6 +130,13 @@ class OverlayWindow {
   // overlay. `f.dwellActive` gates visibility; when false the
   // helper is a no-op so the no-dwell path is zero-cost.
   void DrawDwellPreview(ID2D1RenderTarget* rt, const Feedback& f);
+  // v0.6.2: settle-in countdown. Renders "Calibrating... 1.2s"
+  // at the top-center of the virtual desktop while the grace
+  // window is open, and a brief "✓ Ready" flash the moment
+  // it ends. Without this visible signal, the user can't
+  // tell whether the system is alive (grace active) or
+  // broken (no actions ever firing).
+  void DrawSettlingCountdown(ID2D1RenderTarget* rt, const Feedback& f);
 };
 
 }  // namespace vmosue
