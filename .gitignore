@@ -1,7 +1,12 @@
 # Build directories
 build/
+build_asan/
+build_cov/
 out/
 cmake-build-*/
+
+# package.bat outputs
+dist/
 
 # CMake
 CMakeCache.txt
