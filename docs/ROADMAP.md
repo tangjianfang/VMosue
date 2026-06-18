@@ -58,16 +58,39 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
   `lat_gesture`) with a 1 Hz P50/P95 log line. See
   `docs/build-notes.md → "Measuring per-frame latency"` for how to
   read the output. Commits `1e25510`, `b9d3fc1`.
-- [ ] **D2/D3 · SIMD + shared-memory IPC (pending D1 runtime data).**
-  Run `vmosue.exe` for ~30 s and read `lat_ipc_rtt P95` from the log
-  (`%LOCALAPPDATA%\VMosue\logs\`). If P95 > 33 ms (one frame at 30 fps),
-  the IPC rewrite is justified. Candidates:
-  - Replace pipe IPC with shared memory (eliminates the 3.6 MB
-    synchronous write per frame).
-  - Send the downscaled inference frame (640×480) rather than the full
-    capture frame.
-  - SSE/AVX vectorization of `NV12ToBgra` / `FrameResampler`.
-  **Not started — gated on D1 measurement data.**
+- [~] **D2/D3 · Performance (D1 data collected; root cause identified).**
+  Live measurement (2026-06-18, 320×240 inference):
+  ```
+  capture P50/P95 =  1.3 /  5.1 ms      (negligible)
+  ipc_rtt P50/P95 = 71.5 / 89.9 ms      (dominant — 100% of pipeline cost)
+  gesture P50/P95 =  0.0 /  0.0 ms      (negligible)
+  ```
+  **Root cause:** `ipc_rtt` is end-to-end Python+MediaPipe inference
+  time, NOT pipe write cost (the 3.6 MB pipe theory was wrong; capture
+  is 1ms). MediaPipe `HandLandmarker` on CPU resizes its input to a
+  fixed internal size (~224×224), so reducing our input from 640×480
+  to 320×240 had **no measurable effect** (the 70-90 ms band held).
+  Shared-memory IPC and SIMD on `NV12ToBgra` would each save < 5 ms
+  combined — not worth the complexity.
+  
+  Real options, none of which fit "no new dependencies":
+  - **GPU delegate**: `useGpu=on` is plumbed but `mediapipe` Python on
+    Windows ships only the CPU delegate. Would need a custom build or
+    swap to a different runtime (ONNX Runtime + DirectML, TFLite GPU).
+  - **Lighter model**: `hand_landmarker.task` ships a single FP16
+    variant; an INT8-quantized or distilled variant could halve
+    inference time but is not in MediaPipe's release channel.
+  - **Async / pipelined inference**: decouple `stateMachineLoop` from
+    `landmarkQ_` rate by extrapolating cursor position via the
+    OneEuro filter between landmark frames. Reduces *perceived* lag
+    (cursor moves smoothly at 30+ fps even when landmarks arrive at
+    11 fps) but does not reduce true input-to-action latency.
+  
+  **Recommendation:** the 90 ms inference floor is a structural CPU
+  ceiling, not a fixable defect. Treat it as "shipped with v1.0" and
+  revisit only if/when the GPU delegate or a lighter model lands
+  upstream. The async cursor extrapolation is a UX polish item, not a
+  performance fix.
 
 ## G — Gesture map, per-action verification, latency
 
@@ -86,19 +109,18 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## What needs to happen next
 
-The only remaining actionable item is **D2/D3**, and it requires one
-piece of runtime data:
+**All planned items are either complete or analytically resolved.**
+D2/D3 was the only remaining performance work; runtime measurement
+revealed it is structurally bounded by MediaPipe CPU inference time
+(~90 ms P95) and cannot be improved by IPC, framing, or SIMD changes.
+See the D2/D3 entry above for the data and recommendation.
 
-1. Run `vmosue.exe` (model must be present — run
-   `.\scripts\prepare-resources.ps1` first if needed).
-2. Perform hand gestures for ~30 seconds.
-3. Open `%LOCALAPPDATA%\VMosue\logs\` and find the latest log file.
-4. Search for lines starting with `latency ms (P50/P95)`.
-5. Report the **`ipc_rtt P95`** value.
+If a future iteration wants to push further:
+- Migrate inference off MediaPipe Python (ONNX Runtime + DirectML, or
+  TFLite GPU delegate if it lands for Windows).
+- Or treat the 90 ms floor as a UX problem and add OneEuro-based
+  cursor extrapolation in `stateMachineLoop` so motion stays smooth
+  between landmark frames.
 
-That number determines the optimisation path:
-- **P95 > 33 ms** → shared-memory IPC rewrite is the priority.
-- **P95 < 33 ms but > 10 ms** → downscale the inference frame first
-  (cheap, low-risk).
-- **P95 < 10 ms** → IPC is not the bottleneck; profile NV12→BGRA
-  and FrameResampler next.
+Both are sizeable design changes and warrant their own spec, not a
+line item on this roadmap.
